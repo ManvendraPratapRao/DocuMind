@@ -21,8 +21,8 @@ class Settings:
     
     # Server configuration
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
-
+    PORT: int = int(os.getenv("PORT", 8000))
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "")
     # Models Available (you can expand this as needed)
     SUPPORTED_MODELS: list[str] = [
         "llama-3.3-70b-versatile",

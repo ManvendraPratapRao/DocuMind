@@ -16,7 +16,7 @@ import SchemasPage from './components/SchemasPage'
 import SettingsPage from './components/SettingsPage'
 import HelpPage from './components/HelpPage'
 
-const API_URL = 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 const DOC_TYPES = [
   { value: 'invoice', label: 'Invoice', icon: '📄' },
