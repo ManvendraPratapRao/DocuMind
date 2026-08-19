@@ -418,23 +418,49 @@ export default function App() {
     const allKeys = new Set(['_filename', '_doc_type']);
 
     selectedData.forEach(job => {
-      const flatResult = { _filename: job.filename, _doc_type: job.doc_type };
-      
+      // Find the main table data array (e.g., line_items)
+      let tableData = null;
       for (const [k, v] of Object.entries(job.result)) {
-        allKeys.add(k);
-        if (typeof v === 'object' && v !== null) {
-          // Stringify arrays (like line items) and nested objects so they fit in one column
-          flatResult[k] = JSON.stringify(v);
-        } else {
-          flatResult[k] = v;
+        if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
+          tableData = v;
+          break;
         }
       }
-      
-      allRows.push(flatResult);
+
+      // Extract top-level scalar fields
+      const topLevelFields = { _filename: job.filename, _doc_type: job.doc_type };
+      for (const [k, v] of Object.entries(job.result)) {
+        if (k === 'raw_text_preview') continue; // Omit preview text from CSV as it ruins formatting
+        
+        if (typeof v !== 'object' || v === null) {
+          topLevelFields[k] = v;
+          allKeys.add(k);
+        } else if (v !== tableData) {
+          // If it's a nested object/array that is NOT the main table data, stringify it
+          topLevelFields[k] = JSON.stringify(v);
+          allKeys.add(k);
+        }
+      }
+
+      // Flatten: Create a row for each item in the tableData
+      if (tableData) {
+        tableData.forEach(row => {
+          const rowData = { ...topLevelFields };
+          for (const [rk, rv] of Object.entries(row)) {
+            rowData[rk] = typeof rv === 'object' && rv !== null ? JSON.stringify(rv) : rv;
+            allKeys.add(rk); // Ensure the line-item columns are added to the headers
+          }
+          allRows.push(rowData);
+        });
+      } else {
+        // No table data, just add the top-level object
+        allRows.push(topLevelFields);
+      }
     });
 
     if (allRows.length === 0) return;
 
+    // By passing fields explicitly, PapaParse will guarantee no columns are dropped
     const csv = Papa.unparse({
       fields: Array.from(allKeys),
       data: allRows
