@@ -415,36 +415,30 @@ export default function App() {
     }
 
     let allRows = [];
-    selectedData.forEach(job => {
-      // Find table data if exists (like line items)
-      let tableData = null;
-      for (const [k, v] of Object.entries(job.result)) {
-        if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
-          tableData = v;
-          break;
-        }
-      }
+    const allKeys = new Set(['_filename', '_doc_type']);
 
-      if (tableData) {
-        // Flatten: Append top level scalar fields to every row
-        const topLevelFields = {};
-        for (const [k, v] of Object.entries(job.result)) {
-          if (typeof v !== 'object' || v === null) {
-            topLevelFields[k] = v;
-          }
+    selectedData.forEach(job => {
+      const flatResult = { _filename: job.filename, _doc_type: job.doc_type };
+      
+      for (const [k, v] of Object.entries(job.result)) {
+        allKeys.add(k);
+        if (typeof v === 'object' && v !== null) {
+          // Stringify arrays (like line items) and nested objects so they fit in one column
+          flatResult[k] = JSON.stringify(v);
+        } else {
+          flatResult[k] = v;
         }
-        tableData.forEach(row => {
-          allRows.push({ ...topLevelFields, ...row, _doc_type: job.doc_type, _filename: job.filename });
-        });
-      } else {
-        // No table data, just add the top-level object
-        allRows.push({ ...job.result, _doc_type: job.doc_type, _filename: job.filename });
       }
+      
+      allRows.push(flatResult);
     });
 
     if (allRows.length === 0) return;
 
-    const csv = Papa.unparse(allRows);
+    const csv = Papa.unparse({
+      fields: Array.from(allKeys),
+      data: allRows
+    });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
