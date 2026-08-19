@@ -1,0 +1,64 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.api.routes import health, extract, async_extract
+from app.config import settings
+from app.utils.logger import setup_logger
+from app.database import engine
+from app import models
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from app.limiter import limiter
+
+# Create database tables
+models.Base.metadata.create_all(bind=engine)
+
+logger = setup_logger("main")
+
+app = FastAPI(
+    title="DocuMind API",
+    description="Intelligent document extraction API",
+    version="1.0.0"
+)
+
+# Setup Rate Limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Allow CORS for React Frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",   # Vite fallback port
+        "http://127.0.0.1:5174",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info(f"Starting up {settings.PROJECT_NAME} API v{settings.VERSION}...")
+
+
+#Wire up the router
+
+app.include_router(health.router)
+app.include_router(extract.router)
+app.include_router(async_extract.router)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("API shutting down gracefully...")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "app.main:app",
+        host=str(settings.HOST),
+        port=settings.PORT,
+        reload=True
+    )
