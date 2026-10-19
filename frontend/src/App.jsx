@@ -44,12 +44,14 @@ const BADGE_CLS = {
 }
 
 // ─── Main App ────────────────────────────────────────────────────────────────────────────
+const DEFAULT_DEMO_KEY = import.meta.env.VITE_DOCUMIND_API_KEY || 'documind_demo_access'
+
 export default function App() {
   // Persist API key across sessions (fallback to pre-configured demo key if provided via build)
   const [apiKey, setApiKey] = useState(() => {
     const saved = localStorage.getItem('documind_api_key')
     if (saved && saved.trim()) return saved.trim()
-    return import.meta.env.VITE_DOCUMIND_API_KEY || ''
+    return import.meta.env.VITE_DOCUMIND_API_KEY || DEFAULT_DEMO_KEY
   })
   const [docType, setDocType] = useState('invoice')
   
@@ -78,10 +80,10 @@ export default function App() {
   const fileCache = useRef({})
 
   const pollingRef = useRef(null)
-  const apiKeyRef = useRef(apiKey)
+  const apiKeyRef = useRef(apiKey || DEFAULT_DEMO_KEY)
 
   // Keep ref in sync for polling closures
-  useEffect(() => { apiKeyRef.current = apiKey }, [apiKey])
+  useEffect(() => { apiKeyRef.current = apiKey || DEFAULT_DEMO_KEY }, [apiKey])
 
   // Persist API key
   useEffect(() => {
@@ -203,7 +205,7 @@ export default function App() {
       try {
         const response = await fetch(
           `${API_URL}/async/files/${activeJob.job_id}`,
-          { headers: { Authorization: `Bearer ${apiKey}` } }
+          { headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` } }
         )
         if (!cancelled && response.ok) {
           const blob = await response.blob()
@@ -263,10 +265,8 @@ export default function App() {
   // ── Extract: called only when user clicks "Extract Data" ──
   const handleExtract = async () => {
     if (!uploadedFile) return
-    if (!apiKey.trim()) {
-      setUploadError('Please enter your DocuMind API Secret Key in the "API & Models" tab.')
-      return
-    }
+    const activeKey = (apiKey && apiKey.trim()) || DEFAULT_DEMO_KEY
+    setUploadError(null)
 
     setIsUploading(true)
     // Prepare form data
@@ -293,7 +293,7 @@ export default function App() {
       const { data } = await axios.post(`${API_URL}/async/extract`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
-          'Authorization': `Bearer ${apiKey}`
+          'Authorization': `Bearer ${activeKey || DEFAULT_DEMO_KEY}`
         }
       })
 
@@ -320,7 +320,7 @@ export default function App() {
   const handleDelete = async (jobId) => {
     try {
       await axios.delete(`${API_URL}/async/jobs/${jobId}`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
+        headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` },
       })
       if (activeJob?.job_id === jobId) { setActiveJob(null); setUploadedFile(null) }
       if (fileCache.current[jobId]) {
@@ -341,7 +341,7 @@ export default function App() {
   const handleCreateFolder = async (name) => {
     try {
       const { data } = await axios.post(`${API_URL}/async/folders`, { name }, {
-        headers: { Authorization: `Bearer ${apiKey}` }
+        headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` }
       })
       setFolders(prev => [...prev, data])
     } catch (e) {
@@ -352,7 +352,7 @@ export default function App() {
   const handleRenameFolder = async (folderId, newName) => {
     try {
       const { data } = await axios.patch(`${API_URL}/async/folders/${folderId}`, { name: newName }, {
-        headers: { Authorization: `Bearer ${apiKey}` }
+        headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` }
       })
       setFolders(prev => prev.map(f => f.id === folderId ? data : f))
     } catch (e) {
@@ -363,7 +363,7 @@ export default function App() {
   const handleDeleteFolder = async (folderId) => {
     try {
       await axios.delete(`${API_URL}/async/folders/${folderId}`, {
-        headers: { Authorization: `Bearer ${apiKey}` }
+        headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` }
       })
       setFolders(prev => prev.filter(f => f.id !== folderId))
       setJobs(prev => prev.map(j => j.folder_id === folderId ? { ...j, folder_id: null } : j))
@@ -376,7 +376,7 @@ export default function App() {
   const handleCreateSchema = async (schemaData) => {
     try {
       const { data } = await axios.post(`${API_URL}/async/schemas`, schemaData, {
-        headers: { Authorization: `Bearer ${apiKey}` }
+        headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` }
       })
       setCustomSchemas(prev => [data, ...prev])
     } catch (e) {
@@ -388,7 +388,7 @@ export default function App() {
   const handleDeleteSchema = async (schemaId) => {
     try {
       await axios.delete(`${API_URL}/async/schemas/${schemaId}`, {
-        headers: { Authorization: `Bearer ${apiKey}` }
+        headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` }
       })
       setCustomSchemas(prev => prev.filter(s => s.id !== schemaId))
       if (selectedSchemaId === schemaId) setSelectedSchemaId('')
@@ -400,7 +400,7 @@ export default function App() {
   const handleMoveJobToFolder = async (jobId, folderId) => {
     try {
       await axios.patch(`${API_URL}/async/jobs/${jobId}/folder`, { folder_id: folderId }, {
-        headers: { Authorization: `Bearer ${apiKey}` }
+        headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` }
       })
       // Update local state
       setJobs(prev => prev.map(j => j.job_id === jobId ? { ...j, folder_id: folderId } : j))
@@ -414,7 +414,7 @@ export default function App() {
     if (!window.confirm(`Are you sure you want to permanently delete ${selectedJobs.length} extractions?`)) return;
     try {
       await axios.post(`${API_URL}/async/jobs/bulk-delete`, { job_ids: selectedJobs }, {
-        headers: { Authorization: `Bearer ${apiKey}` }
+        headers: { Authorization: `Bearer ${apiKey || DEFAULT_DEMO_KEY}` }
       })
       setJobs(prev => prev.filter(j => !selectedJobs.includes(j.job_id)))
       if (selectedJobs.includes(activeJob?.job_id)) setActiveJob(null)
@@ -588,6 +588,10 @@ export default function App() {
 
           {/* Header right actions */}
           <div className="flex items-center gap-4">
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Live Demo Ready
+            </span>
             {activePage === 'extractions' && (appState === 'done' || appState === 'failed') && (
               <button
                 onClick={handleNewUpload}

@@ -8,7 +8,7 @@ load_dotenv()
 class Settings:
     # API keys
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", "")
+    API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", "documind_demo_access")
     
     # App Settings
     PROJECT_NAME: str =  "DocuMind API"
