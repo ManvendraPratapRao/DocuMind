@@ -27,3 +27,7 @@ frontend/dist/
 ## Temp scripts
 check_db.py
 migrate_db.py
+
+## User uploads
+uploads/
+

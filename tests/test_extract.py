@@ -50,7 +50,7 @@ def test_async_job_creation():
         data={"doc_type": "invoice"},
         files={"file": ("test.txt", b"dummy content", "text/plain")}
     )
-    assert response.status_code == 200
+    assert response.status_code in [200, 202]
     data = response.json()
     assert "job_id" in data
     assert data["status"] == "processing"

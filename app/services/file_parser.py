@@ -37,12 +37,15 @@ def parse_pdf(file_bytes) -> ParsedDocument:
 
         if not text_content.strip() and settings.EXTRACT_IMAGES:
             logger.info("No text extracted from PDF, attempting image extraction...")
-            images = convert_from_bytes(file_bytes)
-            for img in images:
-                buffered = io.BytesIO()
-                img.save(buffered, format="JPG")
-                img_Str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                images_base64.append(f"data:image/jpeg;base64,{img_Str}")
+            try:
+                images = convert_from_bytes(file_bytes)
+                for img in images:
+                    buffered = io.BytesIO()
+                    img.save(buffered, format="JPEG")
+                    img_Str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                    images_base64.append(f"data:image/jpeg;base64,{img_Str}")
+            except Exception as img_err:
+                logger.warning(f"Could not extract images from PDF (is poppler installed?): {img_err}")
         
         return ParsedDocument(
             text=text_content.strip() if text_content.strip() else None,

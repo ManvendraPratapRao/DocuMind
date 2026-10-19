@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FileText, Plus, Trash2, CheckCircle2, XCircle, Loader2, LayoutGrid, Code, Database, Settings, CreditCard, ArrowLeft, Folder, ChevronRight, ChevronDown, FolderPlus } from 'lucide-react';
+import { FileText, Plus, Trash2, CheckCircle2, XCircle, Loader2, LayoutGrid, Code, Zap, Settings, CreditCard, ArrowLeft, Folder, ChevronRight, ChevronDown, FolderPlus } from 'lucide-react';
 
 function StatusIcon({ status }) {
   if (status === 'done')     return <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />;
@@ -67,7 +67,7 @@ export default function Sidebar({
   const navItems = [
     { id: 'templates', label: 'Templates', icon: <LayoutGrid size={15} /> },
     { id: 'schemas', label: 'Schemas', icon: <Code size={15} /> },
-    { id: 'api', label: 'API & Models', icon: <Database size={15} /> },
+    { id: 'api', label: 'Models', icon: <Zap size={15} /> },
     { id: 'settings', label: 'Settings', icon: <Settings size={15} /> },
   ]
 

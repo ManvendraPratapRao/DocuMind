@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import axios from 'axios'
 import {
-  FileUp, Loader2, Key, AlertCircle, Cpu,
+  FileUp, Loader2, AlertCircle,
   FileText, Sparkles, X, Shield, Upload as UploadIcon
 } from 'lucide-react'
 import Papa from 'papaparse'
@@ -30,10 +30,10 @@ const DOC_TYPES = [
 ]
 
 const INITIAL_MODELS = [
-  { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', badge: 'Recommended', desc: 'Fast · High accuracy', badgeColor: 'blue' },
-  { value: 'mixtral-8x7b-32768', label: 'Mixtral 8×7B', badge: 'Complex', desc: 'Long docs · Detail-rich', badgeColor: 'purple' },
-  { value: 'openai/gpt-oss-120b', label: 'GPT OSS 120B', badge: 'Powerful', desc: 'Best accuracy · Slower', badgeColor: 'emerald' },
-  { value: 'qwen/qwen3.6-27b', label: 'Qwen 3.6 27B', badge: 'Math', desc: 'Numbers · Tables · Finance', badgeColor: 'orange' },
+  { value: 'openai/gpt-oss-120b', label: 'GPT OSS 120B', badge: 'Recommended', desc: 'Powerful · High accuracy', badgeColor: 'blue' },
+  { value: 'openai/gpt-oss-20b', label: 'GPT OSS 20B', badge: 'Fast', desc: 'Fast inference · Efficient', badgeColor: 'emerald' },
+  { value: 'qwen/qwen3.8-27b', label: 'Qwen 3.8 27B', badge: 'Math', desc: 'Numbers · Tables · Finance', badgeColor: 'purple' },
+  { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', badge: 'Versatile', desc: 'General document extraction', badgeColor: 'orange' },
 ]
 
 const BADGE_CLS = {
@@ -45,15 +45,19 @@ const BADGE_CLS = {
 
 // ─── Main App ────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  // Persist API key across sessions
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('documind_api_key') || '')
+  // Persist API key across sessions (fallback to pre-configured demo key if provided via build)
+  const [apiKey, setApiKey] = useState(() => {
+    const saved = localStorage.getItem('documind_api_key')
+    if (saved && saved.trim()) return saved.trim()
+    return import.meta.env.VITE_DOCUMIND_API_KEY || 'downtown_haven_meal'
+  })
   const [docType, setDocType] = useState('invoice')
   
   const [models, setModels] = useState(() => {
     const saved = localStorage.getItem('documind_models')
     return saved ? JSON.parse(saved) : INITIAL_MODELS
   })
-  const [model, setModel] = useState(() => localStorage.getItem('documind_default_model') || 'llama-3.3-70b-versatile')
+  const [model, setModel] = useState(() => localStorage.getItem('documind_default_model') || 'openai/gpt-oss-120b')
 
   // Save models and default model
   useEffect(() => { localStorage.setItem('documind_models', JSON.stringify(models)) }, [models])
@@ -222,6 +226,19 @@ export default function App() {
     }
   }, [uploadedFile, activeJob?.job_id, apiKey])
 
+  const handleLoadSample = async (url, filename, type) => {
+    try {
+      const res = await fetch(url)
+      const blob = await res.blob()
+      const file = new File([blob], filename, { type: 'application/pdf' })
+      setUploadedFile(file)
+      setDocType(type)
+      setUploadError(null)
+    } catch (err) {
+      console.error('Failed to load sample document:', err)
+    }
+  }
+
   // ── Drop handler: just store file, don't upload yet ──
   const onDrop = useCallback((acceptedFiles) => {
     const file = acceptedFiles?.[0]
@@ -247,7 +264,7 @@ export default function App() {
   const handleExtract = async () => {
     if (!uploadedFile) return
     if (!apiKey.trim()) {
-      setUploadError('Please enter your DocuMind API key below to continue.')
+      setUploadError('Please enter your DocuMind API Secret Key in the "API & Models" tab.')
       return
     }
 
@@ -658,6 +675,27 @@ export default function App() {
                       </>
                     )}
                   </div>
+                  
+                  {/* Quick-try sample buttons for frictionless demos */}
+                  {!uploadedFile && (
+                    <div className="flex items-center justify-center gap-2 mb-6 flex-wrap">
+                      <span className="text-[11px] text-slate-500 font-medium">Quick Demo:</span>
+                      <button
+                        type="button"
+                        onClick={() => handleLoadSample('/samples/sample_invoice.pdf', 'sample_invoice.pdf', 'invoice')}
+                        className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg text-[11px] font-medium text-slate-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer shadow-sm hover:border-blue-500/40"
+                      >
+                        📄 Sample Invoice
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLoadSample('/samples/sample_receipt.pdf', 'sample_receipt.pdf', 'receipt')}
+                        className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg text-[11px] font-medium text-slate-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer shadow-sm hover:border-blue-500/40"
+                      >
+                        🧾 Sample Receipt
+                      </button>
+                    </div>
+                  )}
 
                   {/* Error */}
                   {uploadError && (
@@ -809,7 +847,7 @@ export default function App() {
              activePage === 'schemas' ? <SchemasPage schemas={customSchemas} onCreateSchema={handleCreateSchema} onDeleteSchema={handleDeleteSchema} /> :
              activePage === 'settings' ? <SettingsPage /> :
              activePage === 'help' ? <HelpPage /> :
-             activePage === 'api' ? <ApiModelsPage apiKey={apiKey} setApiKey={setApiKey} models={models} setModels={setModels} defaultModel={model} setDefaultModel={setModel} /> :
+             activePage === 'api' ? <ApiModelsPage models={models} setModels={setModels} defaultModel={model} setDefaultModel={setModel} /> :
              activePage === 'extractions' ? (
               appState === 'new' && !activeJob ? (
                 <HowItWorksPanel />

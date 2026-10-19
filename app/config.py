@@ -25,12 +25,13 @@ class Settings:
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "")
     # Models Available (you can expand this as needed)
     SUPPORTED_MODELS: list[str] = [
-        "llama-3.3-70b-versatile",
-        "mixtral-8x7b-32768",
         "openai/gpt-oss-120b",
-        "qwen/qwen3.6-27b"
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
+        "llama-3.3-70b-versatile",
+        "mixtral-8x7b-32768"
     ]
-    DEFAULT_MODEL: str = "llama-3.3-70b-versatile"
+    DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "openai/gpt-oss-120b")
 
 # Instantiate settings to be imported across the app
 settings = Settings()
