@@ -18,9 +18,11 @@ async def verify_api_key(api_key_value: str = Security(api_key_header)):
         
     token = parts[1]
     
-    valid_tokens = {settings.API_SECRET_KEY, "downtown_haven_meal", "downtown"}
-    valid_tokens = {t for t in valid_tokens if t}
-    if token not in valid_tokens:
+    expected_key = settings.API_SECRET_KEY
+    if not expected_key:
+        raise HTTPException(status_code=500, detail="Server misconfigured: API_SECRET_KEY is not set.")
+
+    if token != expected_key:
         raise HTTPException(status_code=401, detail="Invalid API Key")
         
     return token

@@ -31,3 +31,8 @@ migrate_db.py
 ## User uploads
 uploads/
 
+
+## Deployment & Secrets
+api key for deployment
+*.key
+

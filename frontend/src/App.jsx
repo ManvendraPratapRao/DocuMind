@@ -49,7 +49,7 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     const saved = localStorage.getItem('documind_api_key')
     if (saved && saved.trim()) return saved.trim()
-    return import.meta.env.VITE_DOCUMIND_API_KEY || 'downtown_haven_meal'
+    return import.meta.env.VITE_DOCUMIND_API_KEY || ''
   })
   const [docType, setDocType] = useState('invoice')
   

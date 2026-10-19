@@ -10,6 +10,12 @@ from PIL import Image
 from app.utils.logger import setup_logger
 from app.config import settings
 
+try:
+    import pytesseract
+    HAS_PYTESSERACT = True
+except ImportError:
+    HAS_PYTESSERACT = False
+
 logger = setup_logger("file_parser")
 
 class ParsedDocument(BaseModel):
@@ -19,7 +25,7 @@ class ParsedDocument(BaseModel):
     file_type: str
 
 def parse_pdf(file_bytes) -> ParsedDocument:
-    """Extracts text and images from a PDF file."""
+    """Extracts text and images from a PDF file with OCR fallback for scanned pages."""
     text_content = ""
     images_base64 = []
     page_count = 0
@@ -33,17 +39,24 @@ def parse_pdf(file_bytes) -> ParsedDocument:
                 if page_text:
                     text_content += f"\n--- Page {i+1} ---\n{page_text}"
 
-        # If no text was found (scanned PDF), convert to images for vision processing
-
+        # If no text was found (scanned PDF), convert to images for OCR and vision processing
         if not text_content.strip() and settings.EXTRACT_IMAGES:
-            logger.info("No text extracted from PDF, attempting image extraction...")
+            logger.info("No text extracted from PDF, attempting image extraction & OCR...")
             try:
                 images = convert_from_bytes(file_bytes)
-                for img in images:
+                for i, img in enumerate(images):
+                    if HAS_PYTESSERACT:
+                        try:
+                            ocr_text = pytesseract.image_to_string(img)
+                            if ocr_text.strip():
+                                text_content += f"\n--- Page {i+1} (OCR) ---\n{ocr_text.strip()}"
+                        except Exception as ocr_err:
+                            logger.warning(f"OCR failed on scanned PDF page {i+1}: {ocr_err}")
+
                     buffered = io.BytesIO()
                     img.save(buffered, format="JPEG")
-                    img_Str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                    images_base64.append(f"data:image/jpeg;base64,{img_Str}")
+                    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                    images_base64.append(f"data:image/jpeg;base64,{img_str}")
             except Exception as img_err:
                 logger.warning(f"Could not extract images from PDF (is poppler installed?): {img_err}")
         
@@ -52,7 +65,6 @@ def parse_pdf(file_bytes) -> ParsedDocument:
             images_base64=images_base64,
             page_count=page_count,
             file_type="pdf",
-            
         )
     except Exception as e:
         logger.error(f"Error parsing PDF: {str(e)}")
@@ -60,7 +72,7 @@ def parse_pdf(file_bytes) -> ParsedDocument:
 
 
 def parse_image(file_bytes: bytes, filename: str) -> ParsedDocument:
-    """Validates an image and converts it to base64."""
+    """Validates an image, extracts text via OCR if available, and converts to base64."""
     try:
         # Pillow's verify() exhausts the file handle, so open a fresh copy just for validation
         try:
@@ -69,6 +81,18 @@ def parse_image(file_bytes: bytes, filename: str) -> ParsedDocument:
         except Exception:
             raise ValueError("Invalid or corrupted image file")
 
+        # Open fresh image for OCR
+        ocr_text = None
+        if HAS_PYTESSERACT:
+            try:
+                img = Image.open(io.BytesIO(file_bytes))
+                extracted = pytesseract.image_to_string(img)
+                if extracted.strip():
+                    ocr_text = extracted.strip()
+                    logger.info(f"Successfully extracted {len(ocr_text)} characters from image via OCR.")
+            except Exception as ocr_err:
+                logger.warning(f"OCR failed for image {filename}: {ocr_err}")
+
         # Determine format for the base64 prefix
         ext = filename.split(".")[-1].lower()
         mime_type = "image/jpeg" if ext in ["jpg", "jpeg"] else f"image/{ext}"
@@ -76,7 +100,7 @@ def parse_image(file_bytes: bytes, filename: str) -> ParsedDocument:
         img_str = base64.b64encode(file_bytes).decode("utf-8")
 
         return ParsedDocument(
-            text=None,
+            text=ocr_text,
             images_base64=[f"data:{mime_type};base64,{img_str}"],
             page_count=1,
             file_type="image"
@@ -110,6 +134,8 @@ def parse_email(file_bytes: bytes) -> ParsedDocument:
     except Exception as e:
         logger.error(f"Failed to parse email: {str(e)}")
         raise ValueError("Invalid or corrupted .eml file")
+
+
 def parse_text(file_bytes: bytes) -> ParsedDocument:
     """Parses plain text files."""
     try:
@@ -126,6 +152,8 @@ def parse_text(file_bytes: bytes) -> ParsedDocument:
     except Exception as e:
         logger.error(f"Failed to parse text file: {str(e)}")
         raise ValueError("Invalid text file format")
+
+
 def parse_file(file_bytes: bytes, filename: str, content_type: str) -> ParsedDocument:
     """Main entry point for parsing any supported file."""
     

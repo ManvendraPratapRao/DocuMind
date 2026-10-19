@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import health, extract, async_extract
@@ -9,15 +10,22 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.limiter import limiter
 
-# Create database tables
-models.Base.metadata.create_all(bind=engine)
-
 logger = setup_logger("main")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: ensure tables exist
+    models.Base.metadata.create_all(bind=engine)
+    logger.info(f"Starting up {settings.PROJECT_NAME} API v{settings.VERSION}...")
+    yield
+    # Shutdown
+    logger.info("API shutting down gracefully...")
 
 app = FastAPI(
     title="DocuMind API",
     description="Intelligent document extraction API",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Setup Rate Limiter
@@ -48,21 +56,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info(f"Starting up {settings.PROJECT_NAME} API v{settings.VERSION}...")
-
-
-#Wire up the router
-
+# Wire up the routers
 app.include_router(health.router)
 app.include_router(extract.router)
 app.include_router(async_extract.router)
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("API shutting down gracefully...")
-
 
 if __name__ == "__main__":
     import uvicorn
