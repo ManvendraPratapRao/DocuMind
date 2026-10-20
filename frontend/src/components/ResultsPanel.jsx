@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
   CheckCircle2, XCircle, Copy, Download,
   ChevronDown, ChevronRight, FileText, Sparkles, ZoomIn, ZoomOut, Maximize2, TableProperties, Code,
-  User, Calendar, DollarSign, Building2, Hash, Percent, GripHorizontal, Pencil, Check, Loader2, Save
+  User, Calendar, DollarSign, Building2, Hash, Percent, GripHorizontal, Pencil, Check, Loader2, Save,
+  Layers
 } from 'lucide-react'
 import DocumentViewer from './viewer/DocumentViewer'
 import Papa from 'papaparse'
@@ -114,7 +115,7 @@ function CollapsibleSection({ label, children }) {
 // Keys from the backend result that are metadata, not user data fields
 const SKIP_KEYS = new Set(['status', 'confidence_score', 'warnings', 'warning', 'raw_text_preview'])
 
-export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewExtraction, onUpdateJob, apiKey }) {
+export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewExtraction, onUpdateJob, apiKey, batchId, onBackToBatch }) {
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState('fields') // 'fields', 'table', 'raw', 'json'
   
@@ -289,12 +290,22 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
           <p className="text-[13px] text-slate-500 mb-6 leading-relaxed">
             {job?.error || 'An unknown error occurred during extraction.'}
           </p>
-          <button
-            onClick={onNewExtraction}
-            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-[13px] font-semibold rounded-xl transition-all"
-          >
-            Try Again
-          </button>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={onNewExtraction}
+              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-[13px] font-semibold rounded-xl transition-all cursor-pointer"
+            >
+              Try Again
+            </button>
+            {batchId && onBackToBatch && (
+              <button
+                onClick={onBackToBatch}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white text-[13px] font-semibold rounded-xl transition-all border border-slate-700 flex items-center gap-1.5 cursor-pointer shadow-sm"
+              >
+                <Layers size={14} /> Back to Batch
+              </button>
+            )}
+          </div>
         </div>
       </div>
     )
@@ -316,6 +327,28 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
 
   return (
     <div ref={containerRef} className="flex flex-col h-full animate-fade-in bg-[#0a0f1c] overflow-hidden">
+
+      {/* Batch Navigation Banner (when inspecting a document from a batch) */}
+      {batchId && onBackToBatch && (
+        <div className="bg-indigo-950/80 border-b border-indigo-500/30 px-6 py-2.5 flex items-center justify-between shrink-0 z-30 shadow-md">
+          <div className="flex items-center gap-2.5 text-xs text-indigo-200">
+            <div className="w-5 h-5 rounded bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center">
+              <Layers size={12} className="text-indigo-400" />
+            </div>
+            <span>
+              Inspecting document from batch: <span className="font-mono text-indigo-300 font-semibold">{batchId.slice(0, 16)}...</span>
+            </span>
+          </div>
+          <button
+            onClick={onBackToBatch}
+            className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all shadow-md shadow-indigo-950/50 cursor-pointer active:scale-95"
+            title="Return to batch queue and download combined exports"
+          >
+            <Layers size={13} />
+            ← Back to Batch Dashboard
+          </button>
+        </div>
+      )}
 
       {/* Top Half: Document Preview */}
       <div style={{ height: `${topHeight}%` }} className="flex flex-col shrink-0 min-h-[200px]">
@@ -346,6 +379,16 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
               <div className="flex items-center gap-2 px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-bold text-emerald-400">
                 {Math.round((confidence || 1) * 100)}% Confidence
               </div>
+              {batchId && onBackToBatch && (
+                <button
+                  onClick={onBackToBatch}
+                  className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 rounded-lg text-[11px] font-semibold transition-all cursor-pointer"
+                  title="Return to batch progress"
+                >
+                  <Layers size={12} />
+                  Batch View
+                </button>
+              )}
             </div>
 
             {/* Tabs */}

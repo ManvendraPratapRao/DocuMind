@@ -189,8 +189,13 @@ export default function Sidebar({
                         <p className={`text-[13px] font-medium truncate leading-tight ${isActive ? 'text-blue-300' : 'text-slate-300'}`}>
                           {job.filename || 'Unknown file'}
                         </p>
-                        <p className="text-[11px] text-slate-500 truncate mt-0.5">
-                          {job.status === 'done' ? 'Extracted' : job.status}
+                        <p className="text-[11px] text-slate-500 truncate mt-0.5 flex items-center gap-1.5">
+                          <span>{job.status === 'done' ? 'Extracted' : job.status}</span>
+                          {job.batch_id && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-500/15 text-indigo-400 font-mono font-medium">
+                              Batch
+                            </span>
+                          )}
                         </p>
                       </div>
                     </div>

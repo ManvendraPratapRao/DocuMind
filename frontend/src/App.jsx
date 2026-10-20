@@ -295,7 +295,7 @@ export default function App() {
     }
   }, [])
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, open: openFileDialog } = useDropzone({
     onDrop,
     maxFiles: 50,
     multiple: true,
@@ -668,6 +668,27 @@ export default function App() {
                   {activeJob.status === 'failed' && (
                     <span className="text-[10px] font-semibold px-2 py-0.5 bg-red-500/15 text-red-400 rounded-full shrink-0">✗ Failed</span>
                   )}
+                  {(activeBatchId || activeJob.batch_id) && (
+                    <button
+                      onClick={() => {
+                        setActiveBatchId(activeBatchId || activeJob.batch_id)
+                        setActiveJob(null)
+                      }}
+                      className="ml-2 flex items-center gap-1.5 px-2.5 py-1 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 hover:text-white border border-indigo-500/30 rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-sm"
+                      title="Return to batch queue and download combined CSV"
+                    >
+                      <Layers size={13} className="text-indigo-400" />
+                      ← Back to Batch Progress
+                    </button>
+                  )}
+                </>
+              ) : activeBatchId ? (
+                <>
+                  <Layers size={15} className="text-indigo-400 shrink-0" />
+                  <span className="text-sm font-semibold text-slate-200">Batch Processing</span>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 bg-indigo-500/15 text-indigo-300 rounded-full shrink-0 border border-indigo-500/30">
+                    {activeBatchId.slice(0, 16)}...
+                  </span>
                 </>
               ) : (
                 <>
@@ -929,26 +950,77 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Extract Button */}
-                  <button
-                    onClick={handleExtract}
-                    disabled={(!uploadedFile && uploadedFiles.length === 0) || isUploading}
-                    className={`
-                      w-full flex items-center justify-center gap-2 py-3.5 px-6
-                      rounded-xl text-[14px] font-bold transition-all duration-200
-                      {(uploadedFile || uploadedFiles.length > 0) && !isUploading
-                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 active:scale-[0.98] cursor-pointer'
-                        : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'}
-                    `}
-                  >
-                    {isUploading ? (
-                      <><Loader2 size={16} className="animate-spin-slow" /> {uploadedFiles.length > 1 ? 'Queuing Batch...' : 'Extracting...'}</>
-                    ) : uploadedFiles.length > 1 ? (
-                      <><Layers size={16} className="text-indigo-200" /> Start Batch Extraction ({uploadedFiles.length} files) <span className="text-indigo-200 ml-1">→</span></>
-                    ) : (
-                      <><Sparkles size={16} className="text-blue-200" /> Extract Data <span className="text-blue-200 ml-1">→</span></>
-                    )}
-                  </button>
+                  {/* Extract Button Action Area */}
+                  {uploadedFiles.length > 1 ? (
+                    <button
+                      onClick={handleExtract}
+                      disabled={isUploading}
+                      className={`
+                        w-full flex items-center justify-center gap-2 py-3.5 px-6
+                        rounded-xl text-[14px] font-bold transition-all duration-200
+                        ${isUploading
+                          ? 'bg-indigo-900/50 text-indigo-300 border border-indigo-700/50 cursor-wait'
+                          : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 active:scale-[0.98] cursor-pointer'}
+                      `}
+                    >
+                      {isUploading ? (
+                        <><Loader2 size={16} className="animate-spin-slow" /> Queuing Batch ({uploadedFiles.length} files)...</>
+                      ) : (
+                        <><Layers size={16} className="text-indigo-200" /> Start Batch Extraction ({uploadedFiles.length} files) <span className="text-indigo-200 ml-1">→</span></>
+                      )}
+                    </button>
+                  ) : uploadedFile ? (
+                    <button
+                      onClick={handleExtract}
+                      disabled={isUploading}
+                      className={`
+                        w-full flex items-center justify-center gap-2 py-3.5 px-6
+                        rounded-xl text-[14px] font-bold transition-all duration-200
+                        ${isUploading
+                          ? 'bg-blue-900/50 text-blue-300 border border-blue-700/50 cursor-wait'
+                          : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 active:scale-[0.98] cursor-pointer'}
+                      `}
+                    >
+                      {isUploading ? (
+                        <><Loader2 size={16} className="animate-spin-slow" /> Extracting Document...</>
+                      ) : (
+                        <><Sparkles size={16} className="text-blue-200" /> Extract Data <span className="text-blue-200 ml-1">→</span></>
+                      )}
+                    </button>
+                  ) : activeJob ? (
+                    <div className="flex flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openFileDialog()}
+                        className="w-full flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl text-[14px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-slate-600 transition-all duration-200 cursor-pointer shadow-sm active:scale-[0.98]"
+                      >
+                        <UploadIcon size={16} className="text-blue-400" />
+                        Process Another Document
+                      </button>
+                      {(activeBatchId || activeJob?.batch_id) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveBatchId(activeBatchId || activeJob.batch_id)
+                            setActiveJob(null)
+                          }}
+                          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-[12px] font-bold bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 hover:text-white border border-indigo-500/30 transition-all duration-200 cursor-pointer shadow-sm active:scale-[0.98]"
+                        >
+                          <Layers size={14} className="text-indigo-400" />
+                          ← Return to Batch Dashboard
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => openFileDialog()}
+                      className="w-full flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl text-[14px] font-semibold bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700/60 hover:border-slate-600 transition-all duration-200 cursor-pointer"
+                    >
+                      <UploadIcon size={16} className="text-slate-500" />
+                      Select Document to Extract <span className="text-slate-500 ml-1">→</span>
+                    </button>
+                  )}
                   
                   <div className="mt-4 flex items-center justify-center gap-1.5 text-[11px] text-slate-500">
                     <Shield size={12} /> Your data is secure and never stored.
@@ -991,7 +1063,30 @@ export default function App() {
              activePage === 'help' ? <HelpPage /> :
              activePage === 'api' ? <ApiModelsPage models={models} setModels={setModels} defaultModel={model} setDefaultModel={setModel} /> :
              activePage === 'extractions' ? (
-              activeBatchId ? (
+              activeJob ? (
+                appState === 'processing' && (!activeJob.result) ? (
+                  <div className="flex-1 p-6 relative z-10">
+                    <ProcessingView filename={activeJob?.filename || uploadedFile?.name} />
+                  </div>
+                ) : (
+                  <ResultsPanel
+                    job={activeJob}
+                    filePreviewUrl={filePreviewUrl}
+                    uploadedFile={uploadedFile}
+                    batchId={activeBatchId || activeJob?.batch_id}
+                    onBackToBatch={(activeBatchId || activeJob?.batch_id) ? () => {
+                      setActiveBatchId(activeBatchId || activeJob.batch_id)
+                      setActiveJob(null)
+                    } : null}
+                    onNewExtraction={handleNewUpload}
+                    onUpdateJob={(jobId, newResult) => {
+                      setActiveJob(prev => prev && prev.job_id === jobId ? { ...prev, result: newResult } : prev)
+                      setJobs(prev => prev.map(j => j.job_id === jobId ? { ...j, result: newResult } : j))
+                    }}
+                    apiKey={apiKey || DEFAULT_DEMO_KEY}
+                  />
+                )
+              ) : activeBatchId ? (
                 <BatchProcessingView
                   batchId={activeBatchId}
                   apiUrl={API_URL}
@@ -999,28 +1094,12 @@ export default function App() {
                   onClose={() => setActiveBatchId(null)}
                   onInspectJob={(j) => {
                     setActiveJob(j)
-                    setActiveBatchId(null)
+                    // activeBatchId is intentionally preserved so the user can easily return!
                   }}
                   onRefreshJobs={fetchJobsAndFolders}
                 />
-              ) : appState === 'new' && !activeJob ? (
-                <HowItWorksPanel />
-              ) : appState === 'processing' && (!activeJob || !activeJob.result) ? (
-                <div className="flex-1 p-6 relative z-10">
-                  <ProcessingView filename={activeJob?.filename || uploadedFile?.name} />
-                </div>
               ) : (
-                <ResultsPanel
-                  job={activeJob}
-                  filePreviewUrl={filePreviewUrl}
-                  uploadedFile={uploadedFile}
-                  onNewExtraction={handleNewUpload}
-                  onUpdateJob={(jobId, newResult) => {
-                    setActiveJob(prev => prev && prev.job_id === jobId ? { ...prev, result: newResult } : prev)
-                    setJobs(prev => prev.map(j => j.job_id === jobId ? { ...j, result: newResult } : j))
-                  }}
-                  apiKey={apiKey || DEFAULT_DEMO_KEY}
-                />
+                <HowItWorksPanel />
               )
             ) : null}
           </div>
