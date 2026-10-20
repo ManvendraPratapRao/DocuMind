@@ -12,6 +12,9 @@ from app.limiter import limiter
 
 logger = setup_logger("main")
 
+# Startup table verification for test runners & workers
+models.Base.metadata.create_all(bind=engine)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: ensure tables exist

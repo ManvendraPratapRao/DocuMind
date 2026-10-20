@@ -56,6 +56,9 @@ class FolderCreate(BaseModel):
 class FolderUpdate(BaseModel):
     folder_id: str | None
 
+class JobUpdateResult(BaseModel):
+    result: Dict[str, Any]
+
 class BulkDeleteRequest(BaseModel):
     job_ids: List[str]
 
@@ -263,6 +266,18 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    return _job_to_result(job)
+
+
+@router.patch("/jobs/{job_id}", response_model=JobResult)
+async def update_job_result(job_id: str, payload: JobUpdateResult, db: Session = Depends(get_db)):
+    '''Updates the extracted result JSON for a specific job (interactive field editing).'''
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job.result_json = json.dumps(payload.result)
+    db.commit()
+    db.refresh(job)
     return _job_to_result(job)
 
 

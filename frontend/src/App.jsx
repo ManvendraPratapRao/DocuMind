@@ -865,6 +865,11 @@ export default function App() {
                   filePreviewUrl={filePreviewUrl}
                   uploadedFile={uploadedFile}
                   onNewExtraction={handleNewUpload}
+                  onUpdateJob={(jobId, newResult) => {
+                    setActiveJob(prev => prev && prev.job_id === jobId ? { ...prev, result: newResult } : prev)
+                    setJobs(prev => prev.map(j => j.job_id === jobId ? { ...j, result: newResult } : j))
+                  }}
+                  apiKey={apiKey || DEFAULT_DEMO_KEY}
                 />
               )
             ) : null}

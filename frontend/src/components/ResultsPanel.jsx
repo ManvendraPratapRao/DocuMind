@@ -2,10 +2,11 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
   CheckCircle2, XCircle, Copy, Download,
   ChevronDown, ChevronRight, FileText, Sparkles, ZoomIn, ZoomOut, Maximize2, TableProperties, Code,
-  User, Calendar, DollarSign, Building2, Hash, Percent, GripHorizontal
+  User, Calendar, DollarSign, Building2, Hash, Percent, GripHorizontal, Pencil, Check, Loader2, Save
 } from 'lucide-react'
 import DocumentViewer from './viewer/DocumentViewer'
 import Papa from 'papaparse'
+import axios from 'axios'
 
 function ConfidenceBadge({ score }) {
   if (score === undefined || score === null) return null
@@ -17,7 +18,7 @@ function ConfidenceBadge({ score }) {
     red:     'bg-red-500/10     border-red-500/25      text-red-300',
   }[color]
   return (
-    <div className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wide ${cls}`}>
+    <div className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wide border ${cls}`}>
       {pct}%
     </div>
   )
@@ -25,29 +26,65 @@ function ConfidenceBadge({ score }) {
 
 function getFieldIcon(key) {
   const k = key.toLowerCase();
-  if (k.includes('date')) return <Calendar size={13} className="text-slate-400" />;
-  if (k.includes('amount') || k.includes('total') || k.includes('price')) return <DollarSign size={13} className="text-slate-400" />;
-  if (k.includes('name') || k.includes('vendor') || k.includes('customer')) return <User size={13} className="text-slate-400" />;
-  if (k.includes('company') || k.includes('gstin') || k.includes('address')) return <Building2 size={13} className="text-slate-400" />;
-  if (k.includes('tax') || k.includes('rate')) return <Percent size={13} className="text-slate-400" />;
-  return <Hash size={13} className="text-slate-400" />;
+  if (k.includes('date')) return <Calendar size={13} className="text-slate-400 shrink-0" />;
+  if (k.includes('amount') || k.includes('total') || k.includes('price')) return <DollarSign size={13} className="text-slate-400 shrink-0" />;
+  if (k.includes('name') || k.includes('vendor') || k.includes('customer')) return <User size={13} className="text-slate-400 shrink-0" />;
+  if (k.includes('company') || k.includes('gstin') || k.includes('address')) return <Building2 size={13} className="text-slate-400 shrink-0" />;
+  if (k.includes('tax') || k.includes('rate')) return <Percent size={13} className="text-slate-400 shrink-0" />;
+  return <Hash size={13} className="text-slate-400 shrink-0" />;
 }
 
-function FieldRow({ label, value }) {
-  if (value === null || value === undefined || value === '') return null
+function FieldRow({ label, value, isEditing, onChange }) {
+  const [localEditing, setLocalEditing] = useState(false);
+  const activeEditing = isEditing || localEditing;
+
+  if (!activeEditing && (value === null || value === undefined || value === '')) return null;
+
   return (
     <div 
-      className="flex items-center gap-4 py-3 border-b border-slate-800/50 last:border-0 px-4 transition-colors rounded-lg group hover:bg-slate-800/20">
+      className={`flex items-center gap-4 py-2.5 border-b border-slate-800/50 last:border-0 px-4 transition-colors rounded-lg group ${activeEditing ? 'bg-slate-800/40' : 'hover:bg-slate-800/20'}`}>
       <div className="flex items-center gap-2.5 w-1/3 min-w-[200px]">
         {getFieldIcon(label)}
         <span className="text-[12px] font-medium capitalize truncate text-slate-300">
           {label.replace(/_/g, ' ')}
         </span>
       </div>
-      <div className="flex-1 flex items-center justify-between gap-4 min-w-0">
-        <span className="text-[13px] font-medium text-slate-100 whitespace-pre-wrap break-words max-h-40 overflow-y-auto block w-full pr-2">
-          {String(value)}
-        </span>
+      <div className="flex-1 flex items-center justify-between gap-3 min-w-0">
+        {activeEditing ? (
+          <div className="flex items-center gap-2 w-full">
+            <input
+              type="text"
+              value={value === null || value === undefined ? '' : String(value)}
+              onChange={(e) => onChange && onChange(e.target.value)}
+              className="flex-1 bg-slate-900 border border-blue-500/50 focus:border-blue-400 focus:ring-1 focus:ring-blue-400/40 rounded-lg px-3 py-1.5 text-[13px] font-medium text-slate-100 outline-none transition-all shadow-inner"
+              placeholder="Enter value..."
+            />
+            {!isEditing && localEditing && (
+              <button
+                type="button"
+                onClick={() => setLocalEditing(false)}
+                className="p-1.5 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 rounded-lg transition-colors shrink-0"
+                title="Finish editing this field"
+              >
+                <Check size={14} />
+              </button>
+            )}
+          </div>
+        ) : (
+          <div 
+            onClick={() => setLocalEditing(true)}
+            className="flex items-center justify-between w-full cursor-pointer group/val py-0.5"
+            title="Click or use Edit Fields to modify value"
+          >
+            <span className="text-[13px] font-medium text-slate-100 whitespace-pre-wrap break-words max-h-40 overflow-y-auto block pr-2">
+              {String(value)}
+            </span>
+            <div className="flex items-center gap-1 opacity-0 group-hover/val:opacity-100 transition-opacity ml-2 shrink-0">
+              <Pencil size={12} className="text-amber-400/80 group-hover/val:text-amber-300" />
+              <span className="text-[10px] text-slate-500">Edit</span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -77,37 +114,105 @@ function CollapsibleSection({ label, children }) {
 // Keys from the backend result that are metadata, not user data fields
 const SKIP_KEYS = new Set(['status', 'confidence_score', 'warnings', 'warning', 'raw_text_preview'])
 
-export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewExtraction }) {
+export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewExtraction, onUpdateJob, apiKey }) {
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState('fields') // 'fields', 'table', 'raw', 'json'
   
+  // Interactive editing state
+  const [resultData, setResultData] = useState(() => job?.result || {})
+  const [isEditing, setIsEditing] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveSuccess, setSaveSuccess] = useState(false)
+
   const [topHeight, setTopHeight] = useState(55) // percentage
   const [isDragging, setIsDragging] = useState(false)
   const containerRef = useRef(null)
 
+  // Keep local result in sync when switching jobs or when job result changes
+  useEffect(() => {
+    setResultData(job?.result || {})
+    setIsEditing(false)
+    setSaveSuccess(false)
+  }, [job?.job_id, job?.result])
+
+  const updateFlatField = (key, value) => {
+    setResultData(prev => {
+      const updated = { ...prev, [key]: value }
+      if (job) job.result = updated
+      return updated
+    })
+  }
+
+  const updateNestedListItem = (listKey, itemIndex, fieldKey, value) => {
+    setResultData(prev => {
+      const list = Array.isArray(prev[listKey]) ? [...prev[listKey]] : []
+      if (list[itemIndex]) {
+        list[itemIndex] = { ...list[itemIndex], [fieldKey]: value }
+      }
+      const updated = { ...prev, [listKey]: list }
+      if (job) job.result = updated
+      return updated
+    })
+  }
+
+  const updateNestedObjectField = (parentKey, fieldKey, value) => {
+    setResultData(prev => {
+      const parent = typeof prev[parentKey] === 'object' && prev[parentKey] !== null ? { ...prev[parentKey] } : {}
+      parent[fieldKey] = value
+      const updated = { ...prev, [parentKey]: parent }
+      if (job) job.result = updated
+      return updated
+    })
+  }
+
+  const handleSaveEdits = async () => {
+    setIsSaving(true)
+    try {
+      if (job?.job_id) {
+        const key = apiKey || localStorage.getItem('documind_api_key') || 'documind_demo_access'
+        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+        await axios.patch(`${API_URL}/async/jobs/${job.job_id}`, { result: resultData }, {
+          headers: { Authorization: `Bearer ${key}` }
+        })
+      }
+      if (onUpdateJob && job?.job_id) {
+        onUpdateJob(job.job_id, resultData)
+      }
+      setSaveSuccess(true)
+      setTimeout(() => setSaveSuccess(false), 2500)
+      setIsEditing(false)
+    } catch (err) {
+      console.warn('Failed to persist edit to backend:', err)
+      // Even if offline/network issue, keep edits in memory
+      setIsEditing(false)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   const handleCopy = () => {
-    navigator.clipboard.writeText(JSON.stringify(job.result, null, 2))
+    navigator.clipboard.writeText(JSON.stringify(resultData, null, 2))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
   const handleDownloadJSON = () => {
-    const blob = new Blob([JSON.stringify(job.result, null, 2)], { type: 'application/json' })
+    const blob = new Blob([JSON.stringify(resultData, null, 2)], { type: 'application/json' })
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
     a.href     = url
-    a.download = `DocuMind_${job.doc_type}_${job.job_id?.slice(0, 6)}.json`
+    a.download = `DocuMind_${job?.doc_type || 'extraction'}_${job?.job_id?.slice(0, 6) || 'data'}.json`
     a.click()
     URL.revokeObjectURL(url)
   }
 
   const handleExportCSV = () => {
-    if (!job.result) return;
+    if (!resultData) return;
 
     // Dynamically find any array-of-objects (line items, etc)
     let arrayKey = null;
     let arrayData = null;
-    for (const [k, v] of Object.entries(job.result)) {
+    for (const [k, v] of Object.entries(resultData)) {
       if (SKIP_KEYS.has(k)) continue;  // Skip metadata
       if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
         arrayKey = k;
@@ -119,7 +224,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
     let csvData = [];
     if (arrayData) {
       const topLevel = {};
-      for (const [k, v] of Object.entries(job.result)) {
+      for (const [k, v] of Object.entries(resultData)) {
         if (SKIP_KEYS.has(k)) continue;  // Skip metadata
         if (k !== arrayKey && (typeof v !== 'object' || v === null)) {
           topLevel[k] = v;
@@ -128,7 +233,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
       csvData = arrayData.map(row => ({ ...topLevel, ...row }));
     } else {
       const flatRow = {};
-      for (const [k, v] of Object.entries(job.result)) {
+      for (const [k, v] of Object.entries(resultData)) {
         if (SKIP_KEYS.has(k)) continue;  // Skip metadata
         if (typeof v !== 'object' || v === null) flatRow[k] = v;
         else if (!Array.isArray(v)) flatRow[k] = JSON.stringify(v);
@@ -141,7 +246,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `DocuMind_${job.doc_type}_${job.job_id?.slice(0, 6)}.csv`;
+    a.download = `DocuMind_${job?.doc_type || 'extraction'}_${job?.job_id?.slice(0, 6) || 'data'}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -173,7 +278,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
     }
   }, [isDragging])
 
-  if (job.status === 'failed') {
+  if (job?.status === 'failed') {
     return (
       <div className="flex-1 flex items-center justify-center p-8 animate-fade-in h-full bg-[#0a0f1c]">
         <div className="max-w-sm w-full text-center">
@@ -182,7 +287,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
           </div>
           <h2 className="text-xl font-bold text-white mb-2">Extraction Failed</h2>
           <p className="text-[13px] text-slate-500 mb-6 leading-relaxed">
-            {job.error || 'An unknown error occurred during extraction.'}
+            {job?.error || 'An unknown error occurred during extraction.'}
           </p>
           <button
             onClick={onNewExtraction}
@@ -195,25 +300,24 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
     )
   }
 
-  const result       = job.result || {}
-  const confidence   = result.confidence_score
-  const warnings     = result.warnings || result.warning || []
-  const rawText      = result.raw_text_preview || 'No raw text available.'
-  const flatEntries  = Object.entries(result).filter(([k, v]) =>
+  const confidence   = resultData.confidence_score ?? job?.result?.confidence_score
+  const warnings     = resultData.warnings || resultData.warning || job?.result?.warnings || []
+  const rawText      = resultData.raw_text_preview || job?.result?.raw_text_preview || 'No raw text available.'
+  const flatEntries  = Object.entries(resultData).filter(([k, v]) =>
     !SKIP_KEYS.has(k) && !Array.isArray(v) && (typeof v !== 'object' || v === null)
   )
-  const nestedEntries = Object.entries(result).filter(([k, v]) =>
+  const nestedEntries = Object.entries(resultData).filter(([k, v]) =>
     !SKIP_KEYS.has(k) && (Array.isArray(v) || (typeof v === 'object' && v !== null))
   )
 
-  const isPdf   = uploadedFile?.type === 'application/pdf' || job.filename?.toLowerCase().endsWith('.pdf')
-  const isImage = uploadedFile?.type?.startsWith('image/') || job.filename?.toLowerCase().match(/\.(jpg|jpeg|png)$/)
-  const fileName = uploadedFile?.name || job.filename
+  const isPdf   = uploadedFile?.type === 'application/pdf' || job?.filename?.toLowerCase().endsWith('.pdf')
+  const isImage = uploadedFile?.type?.startsWith('image/') || job?.filename?.toLowerCase().match(/\.(jpg|jpeg|png)$/)
+  const fileName = uploadedFile?.name || job?.filename
 
   return (
     <div ref={containerRef} className="flex flex-col h-full animate-fade-in bg-[#0a0f1c] overflow-hidden">
 
-      {/* ── Top Half: Document Preview ── */}
+      {/* Top Half: Document Preview */}
       <div style={{ height: `${topHeight}%` }} className="flex flex-col shrink-0 min-h-[200px]">
         <DocumentViewer 
           filePreviewUrl={filePreviewUrl}
@@ -223,7 +327,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
         />
       </div>
 
-      {/* ── Resizer ── */}
+      {/* Resizer */}
       <div 
         onMouseDown={startResize}
         className={`h-2 -my-1 z-20 cursor-row-resize flex items-center justify-center group relative ${isDragging ? 'bg-indigo-500/20' : 'hover:bg-indigo-500/10'}`}
@@ -231,7 +335,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
         <div className={`w-8 h-1 rounded-full transition-colors ${isDragging ? 'bg-indigo-400' : 'bg-slate-700 group-hover:bg-indigo-400'}`} />
       </div>
 
-      {/* ── Bottom Half: Extraction Results ── */}
+      {/* Bottom Half: Extraction Results */}
       <div style={{ height: `${100 - topHeight}%` }} className="flex flex-col flex-1 shrink-0 overflow-hidden bg-[#0a0f1c] border-t border-slate-800/80">
         
         {/* Header & Tabs */}
@@ -258,9 +362,32 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
             </div>
           </div>
           
-          <button onClick={onNewExtraction} className="flex items-center gap-1.5 px-3 py-1.5 text-slate-300 hover:text-white rounded-lg text-[12px] font-medium transition-colors">
-            Re-extract <Sparkles size={12} className="text-blue-400" />
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Interactive Edit Button */}
+            {isEditing ? (
+              <button 
+                onClick={handleSaveEdits}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[12px] font-bold transition-all shadow-md shadow-emerald-950/40"
+              >
+                {isSaving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                {isSaving ? 'Saving...' : 'Done Editing'}
+              </button>
+            ) : (
+              <button 
+                onClick={() => setIsEditing(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-[12px] font-semibold transition-all shadow-sm"
+                title="Edit extracted fields before exporting"
+              >
+                <Pencil size={12} className="text-amber-400" />
+                {saveSuccess ? <span className="text-emerald-400">Saved!</span> : 'Edit Fields'}
+              </button>
+            )}
+
+            <button onClick={onNewExtraction} className="flex items-center gap-1.5 px-3 py-1.5 text-slate-300 hover:text-white rounded-lg text-[12px] font-medium transition-colors">
+              Re-extract <Sparkles size={12} className="text-blue-400" />
+            </button>
+          </div>
         </div>
 
         {/* Content Area */}
@@ -275,6 +402,20 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
                 </div>
               )}
 
+              {isEditing && (
+                <div className="mb-4 px-4 py-2.5 bg-blue-500/10 border border-blue-500/25 rounded-xl flex items-center justify-between">
+                  <span className="text-[12px] text-blue-300 font-medium">
+                    ✏️ <strong>Edit Mode Active:</strong> You can edit any field directly below. Changes immediately update JSON and CSV exports.
+                  </span>
+                  <button
+                    onClick={handleSaveEdits}
+                    className="text-[11px] font-bold uppercase tracking-wider text-blue-400 hover:text-blue-300 bg-blue-500/20 px-2.5 py-1 rounded-lg transition-colors"
+                  >
+                    Done
+                  </button>
+                </div>
+              )}
+
               <div className="bg-[#111726] border border-slate-800/80 rounded-xl overflow-hidden shadow-sm">
                 {/* Flat fields */}
                 {flatEntries.length > 0 && (
@@ -283,7 +424,9 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
                       <FieldRow 
                         key={k} 
                         label={k} 
-                        value={v} 
+                        value={v}
+                        isEditing={isEditing}
+                        onChange={(newVal) => updateFlatField(k, newVal)}
                       />
                     ))}
                   </div>
@@ -307,34 +450,49 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
                                 </p>
                                 {typeof item === 'object' && item !== null ? (
                                   <div className="flex flex-col">
-                                    {Object.entries(item).map(([k, v]) => {
-                                      return (
-                                        <FieldRow 
-                                          key={k} 
-                                          label={k} 
-                                          value={v} 
-                                        />
-                                      )
-                                    })}
+                                    {Object.entries(item).map(([k, v]) => (
+                                      <FieldRow 
+                                        key={k} 
+                                        label={k} 
+                                        value={v}
+                                        isEditing={isEditing}
+                                        onChange={(newVal) => updateNestedListItem(key, i, k, newVal)}
+                                      />
+                                    ))}
                                   </div>
                                 ) : (
-                                  <div className="px-2 pb-2"><span className="text-[13px] text-slate-300 font-medium">{String(item)}</span></div>
+                                  <div className="px-2 pb-2">
+                                    {isEditing ? (
+                                      <input
+                                        type="text"
+                                        value={item === null || item === undefined ? '' : String(item)}
+                                        onChange={(e) => {
+                                          const list = [...val]
+                                          list[i] = e.target.value
+                                          updateFlatField(key, list)
+                                        }}
+                                        className="w-full bg-slate-900 border border-blue-500/50 rounded px-2.5 py-1 text-[13px] text-slate-100 outline-none"
+                                      />
+                                    ) : (
+                                      <span className="text-[13px] text-slate-300 font-medium">{String(item)}</span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             ))}
                           </div>
                         )
-                      ) : typeof val === 'object' ? (
+                      ) : typeof val === 'object' && val !== null ? (
                         <div className="flex flex-col mt-2 bg-slate-900/50 rounded-xl border border-slate-700/40 shadow-sm">
-                          {Object.entries(val).map(([k, v]) => {
-                            return (
-                              <FieldRow 
-                                key={k} 
-                                label={k} 
-                                value={v} 
-                              />
-                            )
-                          })}
+                          {Object.entries(val).map(([k, v]) => (
+                            <FieldRow 
+                              key={k} 
+                              label={k} 
+                              value={v}
+                              isEditing={isEditing}
+                              onChange={(newVal) => updateNestedObjectField(key, k, newVal)}
+                            />
+                          ))}
                         </div>
                       ) : null}
                     </CollapsibleSection>
@@ -356,7 +514,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
               {(() => {
                 let tableData = null;
                 let arrayKey = null;
-                for (const [k, v] of Object.entries(result)) {
+                for (const [k, v] of Object.entries(resultData)) {
                   if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
                     tableData = v;
                     arrayKey = k;
@@ -382,16 +540,23 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
                       <tbody>
                         {tableData.map((row, i) => (
                           <tr key={i} className="hover:bg-slate-800/30 transition-colors group">
-                            {headers.map(h => {
-                              return (
-                                <td 
-                                  key={h} 
-                                  className="py-3 px-4 border-b border-slate-800/50 text-[13px] font-medium whitespace-nowrap group-last:border-0 text-slate-300 hover:bg-slate-700/50"
-                                >
-                                  {String(row[h] ?? '')}
-                                </td>
-                              )
-                            })}
+                            {headers.map(h => (
+                              <td 
+                                key={h} 
+                                className="py-2.5 px-4 border-b border-slate-800/50 text-[13px] font-medium whitespace-nowrap group-last:border-0 text-slate-300 hover:bg-slate-700/30"
+                              >
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={row[h] === null || row[h] === undefined ? '' : String(row[h])}
+                                    onChange={(e) => updateNestedListItem(arrayKey, i, h, e.target.value)}
+                                    className="w-full min-w-[120px] bg-slate-900 border border-slate-700 focus:border-blue-400 focus:ring-1 focus:ring-blue-400/30 rounded px-2 py-1 text-[12px] text-slate-100 outline-none transition-all"
+                                  />
+                                ) : (
+                                  <span>{String(row[h] ?? '')}</span>
+                                )}
+                              </td>
+                            ))}
                           </tr>
                         ))}
                       </tbody>
@@ -416,7 +581,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
             <div className="p-6 h-full">
               <div className="bg-[#0d121f] border border-slate-800/80 rounded-xl h-full p-4 overflow-auto shadow-sm">
                 <pre className="text-[13px] font-mono text-emerald-400 whitespace-pre-wrap leading-relaxed">
-                  {JSON.stringify(result, null, 2)}
+                  {JSON.stringify(resultData, null, 2)}
                 </pre>
               </div>
             </div>
