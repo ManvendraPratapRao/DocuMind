@@ -20,12 +20,6 @@ const MODEL_INFO = {
     speed: 'Fast',
     accuracy: 'Very Good',
   },
-  'llama-3.3-70b-versatile': {
-    desc: 'A well-rounded general-purpose model. Good fallback for uncommon document types.',
-    strengths: ['Resumes', 'Contracts', 'General Documents'],
-    speed: 'Moderate',
-    accuracy: 'Good',
-  },
 }
 
 export default function ApiModelsPage({ models, setModels, defaultModel, setDefaultModel }) {

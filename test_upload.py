@@ -12,7 +12,7 @@ body = (
     b'receipt\r\n'
     b'-----boundary\r\n'
     b'Content-Disposition: form-data; name="model"\r\n\r\n'
-    b'llama-3.3-70b-versatile\r\n'
+    b'openai/gpt-oss-120b\r\n'
     b'-----boundary\r\n'
     b'Content-Disposition: form-data; name="file"; filename="test.pdf"\r\n'
     b'Content-Type: application/pdf\r\n\r\n'

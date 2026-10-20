@@ -3,7 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import axios from 'axios'
 import {
   FileUp, Loader2, AlertCircle,
-  FileText, Sparkles, X, Shield, Upload as UploadIcon
+  FileText, Sparkles, X, Shield, Upload as UploadIcon, Layers
 } from 'lucide-react'
 import Papa from 'papaparse'
 import Sidebar from './components/Sidebar'
@@ -15,6 +15,7 @@ import TemplatesPage from './components/TemplatesPage'
 import SchemasPage from './components/SchemasPage'
 import SettingsPage from './components/SettingsPage'
 import HelpPage from './components/HelpPage'
+import BatchProcessingView from './components/BatchProcessingView'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -33,7 +34,6 @@ const INITIAL_MODELS = [
   { value: 'openai/gpt-oss-120b', label: 'GPT OSS 120B', badge: 'Recommended', desc: 'Powerful · High accuracy', badgeColor: 'blue' },
   { value: 'openai/gpt-oss-20b', label: 'GPT OSS 20B', badge: 'Fast', desc: 'Fast inference · Efficient', badgeColor: 'emerald' },
   { value: 'qwen/qwen3.8-27b', label: 'Qwen 3.8 27B', badge: 'Math', desc: 'Numbers · Tables · Finance', badgeColor: 'purple' },
-  { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', badge: 'Versatile', desc: 'General document extraction', badgeColor: 'orange' },
 ]
 
 const BADGE_CLS = {
@@ -57,9 +57,24 @@ export default function App() {
   
   const [models, setModels] = useState(() => {
     const saved = localStorage.getItem('documind_models')
-    return saved ? JSON.parse(saved) : INITIAL_MODELS
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        const filtered = parsed.filter(m => m.value !== 'llama-3.3-70b-versatile' && m.value !== 'mixtral-8x7b-32768')
+        return filtered.length > 0 ? filtered : INITIAL_MODELS
+      } catch (e) {
+        return INITIAL_MODELS
+      }
+    }
+    return INITIAL_MODELS
   })
-  const [model, setModel] = useState(() => localStorage.getItem('documind_default_model') || 'openai/gpt-oss-120b')
+  const [model, setModel] = useState(() => {
+    const saved = localStorage.getItem('documind_default_model')
+    if (saved === 'llama-3.3-70b-versatile' || saved === 'mixtral-8x7b-32768') {
+      return 'openai/gpt-oss-120b'
+    }
+    return saved || 'openai/gpt-oss-120b'
+  })
 
   // Save models and default model
   useEffect(() => { localStorage.setItem('documind_models', JSON.stringify(models)) }, [models])
@@ -68,7 +83,9 @@ export default function App() {
   const [activeJob, setActiveJob] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
-  const [uploadedFile, setUploadedFile] = useState(null)   // File object (for PDF preview)
+  const [uploadedFile, setUploadedFile] = useState(null)   // Single File object
+  const [uploadedFiles, setUploadedFiles] = useState([])   // Multiple files for Batch mode
+  const [activeBatchId, setActiveBatchId] = useState(null) // Currently active batch ID
   const [filePreviewUrl, setFilePreviewUrl] = useState(null) // object URL
 
   const [activePage, setActivePage] = useState('extractions')
@@ -98,26 +115,27 @@ export default function App() {
           'new'
 
   // ── Initialize App State ──
-  useEffect(() => {
-    const fetchJobsAndFolders = async () => {
-      const key = apiKeyRef.current
-      if (key) {
-        try {
-          const [jobsRes, foldersRes, schemasRes] = await Promise.all([
-            axios.get(`${API_URL}/async/jobs`, { headers: { Authorization: `Bearer ${key}` } }),
-            axios.get(`${API_URL}/async/folders`, { headers: { Authorization: `Bearer ${key}` } }),
-            axios.get(`${API_URL}/async/schemas`, { headers: { Authorization: `Bearer ${key}` } })
-          ])
-          setJobs(jobsRes.data)
-          setFolders(foldersRes.data)
-          setCustomSchemas(schemasRes.data)
-        } catch (e) {
-          console.error("Failed to fetch jobs or folders:", e)
-        }
+  const fetchJobsAndFolders = useCallback(async () => {
+    const key = apiKeyRef.current
+    if (key) {
+      try {
+        const [jobsRes, foldersRes, schemasRes] = await Promise.all([
+          axios.get(`${API_URL}/async/jobs`, { headers: { Authorization: `Bearer ${key}` } }),
+          axios.get(`${API_URL}/async/folders`, { headers: { Authorization: `Bearer ${key}` } }),
+          axios.get(`${API_URL}/async/schemas`, { headers: { Authorization: `Bearer ${key}` } })
+        ])
+        setJobs(jobsRes.data)
+        setFolders(foldersRes.data)
+        setCustomSchemas(schemasRes.data)
+      } catch (e) {
+        console.error("Failed to fetch jobs or folders:", e)
       }
     }
+  }, [])
+
+  useEffect(() => {
     fetchJobsAndFolders()
-  }, [apiKey])
+  }, [apiKey, fetchJobsAndFolders])
 
   // ── Polling: watch for any "processing" jobs ──
   useEffect(() => {
@@ -234,6 +252,8 @@ export default function App() {
       const blob = await res.blob()
       const file = new File([blob], filename, { type: 'application/pdf' })
       setUploadedFile(file)
+      setUploadedFiles([])
+      setActiveBatchId(null)
       setDocType(type)
       setUploadError(null)
     } catch (err) {
@@ -241,17 +261,44 @@ export default function App() {
     }
   }
 
-  // ── Drop handler: just store file, don't upload yet ──
+  const handleLoadSampleBatch = async () => {
+    try {
+      const res = await fetch('/samples/sample_invoice.pdf')
+      const blob = await res.blob()
+      const files = [
+        new File([blob], 'Acme_Invoice_01.pdf', { type: 'application/pdf' }),
+        new File([blob], 'Acme_Invoice_02.pdf', { type: 'application/pdf' }),
+        new File([blob], 'Acme_Invoice_03.pdf', { type: 'application/pdf' }),
+      ]
+      setUploadedFiles(files)
+      setUploadedFile(null)
+      setActiveBatchId(null)
+      setDocType('invoice')
+      setUploadError(null)
+    } catch (err) {
+      console.error('Failed to load sample batch:', err)
+    }
+  }
+
+  // ── Drop handler: stores single file or array of files for batch mode ──
   const onDrop = useCallback((acceptedFiles) => {
-    const file = acceptedFiles?.[0]
-    if (!file) return
-    setUploadedFile(file)
+    if (!acceptedFiles || acceptedFiles.length === 0) return
+    setActiveBatchId(null)
     setUploadError(null)
+
+    if (acceptedFiles.length === 1) {
+      setUploadedFile(acceptedFiles[0])
+      setUploadedFiles([])
+    } else {
+      setUploadedFiles(acceptedFiles.slice(0, 50))
+      setUploadedFile(null)
+    }
   }, [])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    maxFiles: 1,
+    maxFiles: 50,
+    multiple: true,
     accept: { 
       'application/pdf': ['.pdf'], 
       'image/*': ['.png', '.jpg', '.jpeg', '.bmp', '.tiff'],
@@ -262,8 +309,55 @@ export default function App() {
     },
   })
 
-  // ── Extract: called only when user clicks "Extract Data" ──
+  // ── Batch Extract: called when user submits multiple files ──
+  const handleBatchExtract = async () => {
+    if (!uploadedFiles || uploadedFiles.length === 0) return
+    const activeKey = (apiKey && apiKey.trim()) || DEFAULT_DEMO_KEY
+    setUploadError(null)
+    setIsUploading(true)
+
+    const formData = new FormData()
+    uploadedFiles.forEach(f => {
+      formData.append('files', f)
+    })
+    formData.append('doc_type', docType)
+    if (model) formData.append('model', model)
+
+    const targetFolderId = document.getElementById('upload-folder-select')?.value
+    if (targetFolderId) formData.append('folder_id', targetFolderId)
+
+    if (docType === 'custom') {
+      if (!selectedSchemaId) {
+        setUploadError('Please select a custom schema before extracting.')
+        setIsUploading(false)
+        return
+      }
+      formData.append('schema_id', selectedSchemaId)
+    }
+
+    try {
+      const { data } = await axios.post(`${API_URL}/async/batch-extract`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${activeKey || DEFAULT_DEMO_KEY}`
+        }
+      })
+      setActiveBatchId(data.batch_id)
+      setUploadedFiles([])
+      setUploadedFile(null)
+      setActiveJob(null)
+    } catch (err) {
+      setUploadError(err.response?.data?.detail || err.message || 'Batch upload failed. Check your API key.')
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  // ── Extract: routes between single-file and batch extraction ──
   const handleExtract = async () => {
+    if (uploadedFiles && uploadedFiles.length > 1) {
+      return handleBatchExtract()
+    }
     if (!uploadedFile) return
     const activeKey = (apiKey && apiKey.trim()) || DEFAULT_DEMO_KEY
     setUploadError(null)
@@ -334,6 +428,8 @@ export default function App() {
   const handleNewUpload = () => {
     setActiveJob(null)
     setUploadedFile(null)
+    setUploadedFiles([])
+    setActiveBatchId(null)
     setUploadError(null)
   }
 
@@ -533,7 +629,7 @@ export default function App() {
         jobs={jobs}
         folders={folders}
         activeJobId={activeJob?.job_id}
-        onSelectJob={job => { setActiveJob(job); setUploadedFile(null) }}
+        onSelectJob={job => { setActiveJob(job); setUploadedFile(null); setActiveBatchId(null) }}
         onNewUpload={handleNewUpload}
         onDeleteJob={handleDelete}
         onCreateFolder={handleCreateFolder}
@@ -640,7 +736,40 @@ export default function App() {
                   >
                     <input {...getInputProps()} />
 
-                    {uploadedFile ? (
+                    {uploadedFiles.length > 1 ? (
+                      <>
+                        <div className="w-12 h-12 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center mb-1">
+                          <Layers size={22} className="text-indigo-400" />
+                        </div>
+                        <div>
+                          <p className="text-[14px] font-bold text-indigo-300">
+                            {uploadedFiles.length} Documents Selected
+                          </p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Batch Mode · {(uploadedFiles.reduce((acc, f) => acc + f.size, 0) / 1024 / 1024).toFixed(2)} MB total
+                          </p>
+                          <div className="flex flex-wrap gap-1 justify-center mt-2 max-w-[280px]">
+                            {uploadedFiles.slice(0, 3).map((f, i) => (
+                              <span key={i} className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 truncate max-w-[120px]">
+                                {f.name}
+                              </span>
+                            ))}
+                            {uploadedFiles.length > 3 && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-indigo-400 font-bold">
+                                +{uploadedFiles.length - 3} more
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={e => { e.stopPropagation(); setUploadedFiles([]); setUploadError(null) }}
+                          className="absolute top-3 right-3 p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
+                          title="Clear batch"
+                        >
+                          <X size={14} />
+                        </button>
+                      </>
+                    ) : uploadedFile ? (
                       <>
                         <div className="w-12 h-12 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mb-1">
                           <FileText size={22} className="text-emerald-400" />
@@ -668,20 +797,20 @@ export default function App() {
                           <UploadIcon size={22} className="text-blue-400" />
                         </div>
                         <div>
-                          <p className="text-slate-200 font-semibold text-[14px] mb-1">Drop your document here</p>
+                          <p className="text-slate-200 font-semibold text-[14px] mb-1">Drop your documents here</p>
                           <p className="text-slate-400 text-[13px]">
                             or <span className="text-blue-400 font-medium">browse files</span>
                           </p>
                         </div>
                         <div className="text-[11px] font-medium text-slate-500 mt-1 uppercase tracking-wider">
-                          PDF, PNG, JPG · Up to 10 MB
+                          Upload 1 file or a batch of up to 50 files
                         </div>
                       </>
                     )}
                   </div>
                   
                   {/* Quick-try sample buttons for frictionless demos */}
-                  {!uploadedFile && (
+                  {(!uploadedFile && uploadedFiles.length === 0) && (
                     <div className="flex items-center justify-center gap-2 mb-6 flex-wrap">
                       <span className="text-[11px] text-slate-500 font-medium">Quick Demo:</span>
                       <button
@@ -697,6 +826,13 @@ export default function App() {
                         className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg text-[11px] font-medium text-slate-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer shadow-sm hover:border-blue-500/40"
                       >
                         🧾 Sample Receipt
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleLoadSampleBatch}
+                        className="px-2.5 py-1 bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-700/60 rounded-lg text-[11px] font-medium text-indigo-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer shadow-sm hover:border-indigo-400/50"
+                      >
+                        ⚡ Batch Demo (3 Invoices)
                       </button>
                     </div>
                   )}
@@ -796,17 +932,19 @@ export default function App() {
                   {/* Extract Button */}
                   <button
                     onClick={handleExtract}
-                    disabled={!uploadedFile || isUploading}
+                    disabled={(!uploadedFile && uploadedFiles.length === 0) || isUploading}
                     className={`
                       w-full flex items-center justify-center gap-2 py-3.5 px-6
                       rounded-xl text-[14px] font-bold transition-all duration-200
-                      ${uploadedFile && !isUploading
-                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 active:scale-[0.98]'
+                      {(uploadedFile || uploadedFiles.length > 0) && !isUploading
+                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 active:scale-[0.98] cursor-pointer'
                         : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'}
                     `}
                   >
                     {isUploading ? (
-                      <><Loader2 size={16} className="animate-spin-slow" /> Extracting...</>
+                      <><Loader2 size={16} className="animate-spin-slow" /> {uploadedFiles.length > 1 ? 'Queuing Batch...' : 'Extracting...'}</>
+                    ) : uploadedFiles.length > 1 ? (
+                      <><Layers size={16} className="text-indigo-200" /> Start Batch Extraction ({uploadedFiles.length} files) <span className="text-indigo-200 ml-1">→</span></>
                     ) : (
                       <><Sparkles size={16} className="text-blue-200" /> Extract Data <span className="text-blue-200 ml-1">→</span></>
                     )}
@@ -853,7 +991,19 @@ export default function App() {
              activePage === 'help' ? <HelpPage /> :
              activePage === 'api' ? <ApiModelsPage models={models} setModels={setModels} defaultModel={model} setDefaultModel={setModel} /> :
              activePage === 'extractions' ? (
-              appState === 'new' && !activeJob ? (
+              activeBatchId ? (
+                <BatchProcessingView
+                  batchId={activeBatchId}
+                  apiUrl={API_URL}
+                  apiKey={apiKey || DEFAULT_DEMO_KEY}
+                  onClose={() => setActiveBatchId(null)}
+                  onInspectJob={(j) => {
+                    setActiveJob(j)
+                    setActiveBatchId(null)
+                  }}
+                  onRefreshJobs={fetchJobsAndFolders}
+                />
+              ) : appState === 'new' && !activeJob ? (
                 <HowItWorksPanel />
               ) : appState === 'processing' && (!activeJob || !activeJob.result) ? (
                 <div className="flex-1 p-6 relative z-10">

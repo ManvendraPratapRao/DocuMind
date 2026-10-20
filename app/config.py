@@ -27,9 +27,7 @@ class Settings:
     SUPPORTED_MODELS: list[str] = [
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
-        "qwen/qwen3.8-27b",
-        "llama-3.3-70b-versatile",
-        "mixtral-8x7b-32768"
+        "qwen/qwen3.8-27b"
     ]
     DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "openai/gpt-oss-120b")
 

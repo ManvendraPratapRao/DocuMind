@@ -9,9 +9,12 @@
 
 import uuid
 import json
+import csv
+import io
+import mimetypes
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -41,6 +44,7 @@ class JobResult(BaseModel):
     job_id: str
     folder_id: Optional[str] = None
     schema_id: Optional[str] = None
+    batch_id: Optional[str] = None
     status: str
     doc_type: Optional[str] = None
     filename: Optional[str] = None
@@ -49,6 +53,24 @@ class JobResult(BaseModel):
     error: Optional[str] = None
     created_at: str
     completed_at: Optional[str] = None
+
+class BatchCreateResponse(BaseModel):
+    batch_id: str
+    total: int
+    status: str
+    job_ids: List[str]
+
+class BatchSummary(BaseModel):
+    batch_id: str
+    doc_type: str
+    total: int
+    completed: int
+    failed: int
+    pending: int
+    percent_complete: float
+    status: str
+    created_at: str
+    jobs: List[JobResult]
 
 class FolderCreate(BaseModel):
     name: str
@@ -87,6 +109,7 @@ def _job_to_result(job: Job) -> JobResult:
         job_id=job.id,
         folder_id=job.folder_id,
         schema_id=job.schema_id,
+        batch_id=job.batch_id,
         status=job.status,
         doc_type=job.doc_type,
         filename=job.filename,
@@ -153,8 +176,86 @@ def process_extraction_task(
         db.close()
 
 
+def process_batch_task(
+    batch_id: str,
+    job_ids: List[str],
+    doc_type: str,
+    model: str = None,
+    schema_id: str = None
+):
+    """
+    Background batch task processor.
+    Sequentially processes each file in the batch:
+    1. Loads the saved file from disk (disk-spooling to save RAM)
+    2. Runs layout parsing and LLM extraction
+    3. Saves structured result to database
+    4. Handles per-document failures without halting the rest of the batch
+    """
+    logger.info(f"Starting batch worker for batch {batch_id} with {len(job_ids)} jobs.")
+    db = SessionLocal()
+    try:
+        for index, j_id in enumerate(job_ids, start=1):
+            job = db.query(Job).filter(Job.id == j_id).first()
+            if not job or not job.file_path or not os.path.exists(job.file_path):
+                logger.warning(f"Batch {batch_id}: Job {j_id} file not found on disk.")
+                if job:
+                    job.status = "failed"
+                    job.error = "Uploaded file not found on server disk."
+                    job.completed_at = datetime.utcnow()
+                    db.commit()
+                continue
+
+            try:
+                job.status = "processing"
+                db.commit()
+
+                with open(job.file_path, "rb") as fp:
+                    file_bytes = fp.read()
+
+                content_type, _ = mimetypes.guess_type(job.file_path)
+                content_type = content_type or "application/pdf"
+
+                parsed_doc = parse_file(file_bytes, job.filename or "file.pdf", content_type)
+
+                if doc_type == "custom" and schema_id:
+                    schema_obj = db.query(CustomSchema).filter(CustomSchema.id == schema_id).first()
+                    raw_fields = db.query(CustomSchemaField).filter(CustomSchemaField.schema_id == schema_id).all()
+                    fields_list = [
+                        {
+                            "name": f.name,
+                            "field_type": f.field_type,
+                            "description": f.description,
+                            "list_item_schema": f.list_item_schema,
+                        }
+                        for f in raw_fields
+                    ]
+                    result_dict = extract_document_custom_sync(parsed_doc, schema_obj.name, fields_list, model=model)
+                else:
+                    result = extract_document_sync(parsed_doc, doc_type, model=model)
+                    result_dict = result.model_dump()
+
+                job.status = "done"
+                job.result_json = json.dumps(result_dict)
+                job.completed_at = datetime.utcnow()
+                db.commit()
+                logger.info(f"Batch {batch_id} [{index}/{len(job_ids)}]: Successfully extracted {job.filename}")
+
+            except Exception as item_err:
+                logger.error(f"Batch {batch_id} [{index}/{len(job_ids)}]: Error extracting {job.filename}: {item_err}", exc_info=True)
+                db.rollback()
+                job = db.query(Job).filter(Job.id == j_id).first()
+                if job:
+                    job.status = "failed"
+                    job.error = str(item_err)[:1000]
+                    job.completed_at = datetime.utcnow()
+                    db.commit()
+    finally:
+        db.close()
+        logger.info(f"Batch worker finished for batch {batch_id}.")
+
+
 @router.post("/extract", response_model=JobResult, status_code=202)
-@limiter.limit("10/minute")
+@limiter.limit("30/minute")
 async def extract_data_async(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -189,11 +290,10 @@ async def extract_data_async(
 
     # Rolling limit: enforce BEFORE creating the new job
     total_jobs = db.query(Job).count()
-    if total_jobs >= 29:  # Leave room for the one we're about to create
-        jobs_to_delete = total_jobs - 29
+    if total_jobs >= 150:  # Expanded limit for high-volume workflows
+        jobs_to_delete = total_jobs - 149
         oldest_jobs = db.query(Job).order_by(Job.created_at.asc()).limit(jobs_to_delete).all()
         for old_job in oldest_jobs:
-            # Clean up saved file if it exists
             if old_job.file_path and os.path.exists(old_job.file_path):
                 try:
                     os.remove(old_job.file_path)
@@ -258,6 +358,236 @@ async def list_jobs(db: Session = Depends(get_db)):
     """Returns all extraction jobs ordered newest-first."""
     jobs = db.query(Job).order_by(Job.created_at.desc()).all()
     return [_job_to_result(j) for j in jobs]
+
+
+# ── Batch Extraction Endpoints ──────────────────────────────────────────────
+
+@router.post("/batch-extract", response_model=BatchCreateResponse, status_code=202)
+@limiter.limit("20/minute")
+async def extract_batch_async(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    doc_type: str = Form(..., description="The type of document"),
+    model: str = Form(None, description="The LLM model to use (optional)"),
+    folder_id: str = Form(None, description="Target folder ID (optional)"),
+    schema_id: str = Form(None, description="Custom schema ID (required when doc_type=custom)"),
+    files: List[UploadFile] = File(..., description="Up to 50 documents to process in batch"),
+    db: Session = Depends(get_db)
+):
+    """
+    Submits up to 50 documents for batch background extraction.
+    Creates job records linked by a common batch_id and starts sequential processing in the background.
+    Poll GET /async/batch/{batch_id} to track real-time progress.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided for batch processing.")
+
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail=f"Maximum 50 files allowed per batch (received {len(files)}).")
+
+    if doc_type == "custom":
+        if not schema_id:
+            raise HTTPException(status_code=400, detail="schema_id is required when doc_type is 'custom'")
+        schema_exists = db.query(CustomSchema).filter(CustomSchema.id == schema_id).first()
+        if not schema_exists:
+            raise HTTPException(status_code=404, detail=f"Custom schema '{schema_id}' not found")
+    elif doc_type not in SCHEMA_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported doc_type '{doc_type}'. Valid: {list(SCHEMA_REGISTRY.keys()) + ['custom']}"
+        )
+
+    if folder_id:
+        folder_exists = db.query(Folder).filter(Folder.id == folder_id).first()
+        if not folder_exists:
+            raise HTTPException(status_code=404, detail=f"Folder '{folder_id}' not found")
+
+    batch_id = str(uuid.uuid4())
+    job_ids = []
+
+    # Enforce rolling limit for space
+    total_jobs = db.query(Job).count()
+    if total_jobs + len(files) > 200:
+        jobs_to_delete = (total_jobs + len(files)) - 200
+        oldest_jobs = db.query(Job).order_by(Job.created_at.asc()).limit(jobs_to_delete).all()
+        for old_job in oldest_jobs:
+            if old_job.file_path and os.path.exists(old_job.file_path):
+                try:
+                    os.remove(old_job.file_path)
+                except OSError:
+                    pass
+            db.delete(old_job)
+        db.commit()
+
+    for file in files:
+        job_id = str(uuid.uuid4())
+        try:
+            file_bytes = await file.read()
+        except Exception:
+            continue
+
+        if len(file_bytes) > settings.MAX_FILE_SIZE_MB * 1024 * 1024:
+            continue
+
+        safe_filename = "".join(c for c in (file.filename or "file") if c.isalnum() or c in '._- ').strip()
+        file_path = os.path.join(PATH_UPLOADS, f"{job_id}_{safe_filename}")
+        try:
+            with open(file_path, "wb") as fp:
+                fp.write(file_bytes)
+        except Exception as e:
+            logger.warning(f"Could not save batch file to disk: {e}")
+            file_path = None
+
+        new_job = Job(
+            id=job_id,
+            batch_id=batch_id,
+            status="pending",
+            doc_type=doc_type,
+            filename=file.filename or safe_filename,
+            model_used=model,
+            folder_id=folder_id,
+            schema_id=schema_id,
+            file_path=file_path,
+        )
+        db.add(new_job)
+        job_ids.append(job_id)
+
+    db.commit()
+
+    if not job_ids:
+        raise HTTPException(status_code=400, detail="None of the uploaded files could be processed.")
+
+    background_tasks.add_task(
+        process_batch_task,
+        batch_id,
+        job_ids,
+        doc_type,
+        model,
+        schema_id
+    )
+
+    logger.info(f"Batch {batch_id} queued with {len(job_ids)} jobs.")
+    return BatchCreateResponse(
+        batch_id=batch_id,
+        total=len(job_ids),
+        status="processing",
+        job_ids=job_ids
+    )
+
+
+@router.get("/batch/{batch_id}", response_model=BatchSummary)
+async def get_batch_status(batch_id: str, db: Session = Depends(get_db)):
+    """
+    Returns real-time aggregated progress of a batch extraction.
+    Includes percent completion, job statuses, and individual results.
+    """
+    jobs = db.query(Job).filter(Job.batch_id == batch_id).order_by(Job.created_at.asc()).all()
+    if not jobs:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+
+    total = len(jobs)
+    completed = sum(1 for j in jobs if j.status == "done")
+    failed = sum(1 for j in jobs if j.status == "failed")
+    pending = sum(1 for j in jobs if j.status in ["processing", "pending"])
+    percent = round(((completed + failed) / total) * 100, 1) if total > 0 else 0.0
+    overall_status = "completed" if pending == 0 else "processing"
+
+    doc_type = jobs[0].doc_type if jobs else "invoice"
+    created_at = jobs[0].created_at.isoformat() if jobs else datetime.utcnow().isoformat()
+
+    return BatchSummary(
+        batch_id=batch_id,
+        doc_type=doc_type,
+        total=total,
+        completed=completed,
+        failed=failed,
+        pending=pending,
+        percent_complete=percent,
+        status=overall_status,
+        created_at=created_at,
+        jobs=[_job_to_result(j) for j in jobs]
+    )
+
+
+@router.get("/batch/{batch_id}/export-csv")
+async def export_batch_csv(batch_id: str, db: Session = Depends(get_db)):
+    """
+    Combines extracted structured data from all completed jobs in a batch into a unified CSV.
+    Handles invoices, receipts, and general schemas with line items or flat key-value pairs.
+    """
+    jobs = db.query(Job).filter(Job.batch_id == batch_id, Job.status == "done").order_by(Job.created_at.asc()).all()
+    if not jobs:
+        raise HTTPException(status_code=404, detail=f"No completed jobs found for batch {batch_id}")
+
+    output = io.StringIO()
+    all_rows = []
+
+    for job in jobs:
+        if not job.result_json:
+            continue
+        try:
+            data = json.loads(job.result_json)
+        except Exception:
+            continue
+
+        base_meta = {
+            "batch_id": batch_id,
+            "filename": job.filename,
+            "doc_type": job.doc_type,
+            "confidence_score": data.get("confidence_score", ""),
+            "status": job.status,
+            "created_at": job.created_at.strftime("%Y-%m-%d %H:%M:%S") if job.created_at else "",
+        }
+
+        # Check for list of line items or transactions
+        line_items = None
+        for key in ["line_items", "items", "transactions", "experience"]:
+            if key in data and isinstance(data[key], list) and len(data[key]) > 0:
+                line_items = (key, data[key])
+                break
+
+        # Flat scalar fields (excluding long previews/warnings)
+        scalar_fields = {
+            k: v for k, v in data.items()
+            if not isinstance(v, (dict, list)) and k not in ["raw_text_preview", "warning", "confidence_score", "status"]
+        }
+
+        if line_items:
+            key_name, items_list = line_items
+            for item in items_list:
+                row = {**base_meta, **scalar_fields}
+                if isinstance(item, dict):
+                    for ik, iv in item.items():
+                        row[f"item_{ik}"] = iv
+                else:
+                    row["item_value"] = str(item)
+                all_rows.append(row)
+        else:
+            row = {**base_meta, **scalar_fields}
+            all_rows.append(row)
+
+    if not all_rows:
+        raise HTTPException(status_code=404, detail="No extracted data available to export.")
+
+    # Determine unique headers preserving order
+    fieldnames = []
+    for r in all_rows:
+        for k in r.keys():
+            if k not in fieldnames:
+                fieldnames.append(k)
+
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for r in all_rows:
+        writer.writerow(r)
+
+    csv_content = output.getvalue()
+    filename = f"batch_{batch_id[:8]}_export.csv"
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=JobResult)

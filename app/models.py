@@ -48,5 +48,6 @@ class Job(Base):
     model_used = Column(String, nullable=True)
     result_json = Column(Text, nullable=True)
     error = Column(String(1000), nullable=True)
+    batch_id = Column(String, nullable=True, index=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     completed_at = Column(DateTime, nullable=True)
