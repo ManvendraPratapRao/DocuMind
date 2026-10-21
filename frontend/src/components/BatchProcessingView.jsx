@@ -24,6 +24,8 @@ export default function BatchProcessingView({
 }) {
   const [batchData, setBatchData] = useState(null)
   const [isExporting, setIsExporting] = useState(false)
+  const [isSyncingWebhook, setIsSyncingWebhook] = useState(false)
+  const [webhookSyncSuccess, setWebhookSyncSuccess] = useState(false)
   const [error, setError] = useState(null)
   const timerRef = useRef(null)
 
@@ -107,6 +109,34 @@ export default function BatchProcessingView({
     URL.revokeObjectURL(url)
   }
 
+  const handleSyncToWebhook = async () => {
+    const webhookUrl = localStorage.getItem('documind_webhook_url')
+    if (!webhookUrl) {
+      alert("Please configure your Google Sheets or Webhook URL in Settings first.")
+      return
+    }
+    const completedJobIds = (batchData?.jobs || []).filter(j => j.status === 'done').map(j => j.job_id)
+    if (completedJobIds.length === 0) {
+      alert("No completed extractions to sync yet.")
+      return
+    }
+
+    setIsSyncingWebhook(true)
+    try {
+      const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
+      const res = await axios.post(`${apiUrl}/async/webhook/send`, {
+        url: webhookUrl,
+        job_ids: completedJobIds
+      }, { headers })
+      setWebhookSyncSuccess(true)
+      setTimeout(() => setWebhookSyncSuccess(false), 3000)
+    } catch (err) {
+      alert("Webhook sync failed: " + (err.response?.data?.detail || err.message || 'Unknown error'))
+    } finally {
+      setIsSyncingWebhook(false)
+    }
+  }
+
   const isCompleted = batchData?.status === 'completed'
   const percent = batchData?.percent_complete || 0
 
@@ -140,6 +170,17 @@ export default function BatchProcessingView({
           >
             {isExporting ? <Loader2 size={15} className="animate-spin" /> : <FileSpreadsheet size={15} />}
             <span>Download Combined CSV</span>
+          </button>
+
+          {/* Sync to Webhook Button */}
+          <button
+            onClick={handleSyncToWebhook}
+            disabled={!batchData || batchData.completed === 0 || isSyncingWebhook}
+            className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white text-[12px] font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-emerald-950/30"
+            title="Push completed batch documents directly into Google Sheets"
+          >
+            {isSyncingWebhook ? <Loader2 size={14} className="animate-spin" /> : webhookSyncSuccess ? <CheckCircle2 size={14} /> : <FileSpreadsheet size={14} />}
+            <span>{webhookSyncSuccess ? 'Synced to Sheets!' : 'Sync to Sheets'}</span>
           </button>
 
           {/* Export JSON Button */}

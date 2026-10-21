@@ -22,6 +22,7 @@ from app.config import settings
 from app.schemas import SCHEMA_REGISTRY
 from app.services.file_parser import parse_file
 from app.services.extractor import extract_document, extract_document_sync, extract_document_custom, extract_document_custom_sync
+from app.services.webhook import format_job_payload, send_webhook_sync, send_webhook_async
 from app.api.dependencies import verify_api_key
 from app.utils.logger import setup_logger
 from app.database import get_db, SessionLocal
@@ -71,6 +72,14 @@ class BatchSummary(BaseModel):
     status: str
     created_at: str
     jobs: List[JobResult]
+
+class WebhookTestRequest(BaseModel):
+    url: str
+    payload: Optional[Dict[str, Any]] = None
+
+class WebhookSendRequest(BaseModel):
+    url: str
+    job_ids: List[str]
 
 class FolderCreate(BaseModel):
     name: str
@@ -128,7 +137,8 @@ def process_extraction_task(
     content_type: str,
     doc_type: str,
     model: str = None,
-    schema_id: str = None
+    schema_id: str = None,
+    webhook_url: str = None
 ):
     """
     Background task — runs synchronously in a thread pool.
@@ -163,6 +173,14 @@ def process_extraction_task(
             db.commit()
             logger.info(f"Job {job_id} completed successfully.")
 
+            # Automatic Webhook Delivery
+            if webhook_url:
+                try:
+                    wh_payload = format_job_payload(job)
+                    send_webhook_sync(webhook_url, wh_payload)
+                except Exception as wh_err:
+                    logger.warning(f"Webhook dispatch failed for job {job_id}: {wh_err}")
+
     except Exception as e:
         logger.error(f"Job {job_id} failed: {str(e)}", exc_info=True)
         db.rollback()
@@ -181,7 +199,8 @@ def process_batch_task(
     job_ids: List[str],
     doc_type: str,
     model: str = None,
-    schema_id: str = None
+    schema_id: str = None,
+    webhook_url: str = None
 ):
     """
     Background batch task processor.
@@ -240,6 +259,14 @@ def process_batch_task(
                 db.commit()
                 logger.info(f"Batch {batch_id} [{index}/{len(job_ids)}]: Successfully extracted {job.filename}")
 
+                # Automatic Webhook Delivery per item
+                if webhook_url:
+                    try:
+                        wh_payload = format_job_payload(job)
+                        send_webhook_sync(webhook_url, wh_payload)
+                    except Exception as wh_err:
+                        logger.warning(f"Batch webhook dispatch failed for job {job.id}: {wh_err}")
+
             except Exception as item_err:
                 logger.error(f"Batch {batch_id} [{index}/{len(job_ids)}]: Error extracting {job.filename}: {item_err}", exc_info=True)
                 db.rollback()
@@ -263,6 +290,7 @@ async def extract_data_async(
     model: str = Form(None, description="The LLM model to use (optional)"),
     folder_id: str = Form(None, description="Target folder ID (optional)"),
     schema_id: str = Form(None, description="Custom schema ID (required when doc_type=custom)"),
+    webhook_url: str = Form(None, description="Webhook URL to POST extraction results to (optional)"),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -346,7 +374,8 @@ async def extract_data_async(
         file.content_type,
         doc_type,
         model,
-        schema_id
+        schema_id,
+        webhook_url
     )
 
     logger.info(f"Job {job_id} queued for '{file.filename}' [{doc_type}] schema={schema_id} model={model}")
@@ -371,6 +400,7 @@ async def extract_batch_async(
     model: str = Form(None, description="The LLM model to use (optional)"),
     folder_id: str = Form(None, description="Target folder ID (optional)"),
     schema_id: str = Form(None, description="Custom schema ID (required when doc_type=custom)"),
+    webhook_url: str = Form(None, description="Webhook URL to POST extraction results to (optional)"),
     files: List[UploadFile] = File(..., description="Up to 50 documents to process in batch"),
     db: Session = Depends(get_db)
 ):
@@ -463,7 +493,8 @@ async def extract_batch_async(
         job_ids,
         doc_type,
         model,
-        schema_id
+        schema_id,
+        webhook_url
     )
 
     logger.info(f"Batch {batch_id} queued with {len(job_ids)} jobs.")
@@ -829,3 +860,79 @@ async def get_job_file(job_id: str, db: Session = Depends(get_db)):
         media_type=mime_type,
         filename=job.filename or os.path.basename(job.file_path),
     )
+
+
+# ── Webhook Endpoints ────────────────────────────────────────────────────────
+
+@router.post("/webhook/test")
+async def test_webhook_endpoint(data: WebhookTestRequest):
+    """
+    Tests connectivity to a user-provided webhook URL (e.g. Google Sheets Web App or Zapier).
+    Returns HTTP status code, latency in ms, and preview of destination response.
+    """
+    if not data.url or not data.url.strip().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid URL. Must start with http:// or https://")
+
+    sample_payload = data.payload or {
+        "event": "test.ping",
+        "timestamp": datetime.utcnow().isoformat(),
+        "filename": "DocuMind_Sample_Invoice.pdf",
+        "doc_type": "invoice",
+        "confidence_score": 0.98,
+        "data": {
+            "invoice_number": "INV-TEST-001",
+            "invoice_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "vendor_name": "DocuMind Global Logistics",
+            "buyer_name": "Acme Corporation",
+            "total_amount": 1250.00,
+            "status": "verified"
+        }
+    }
+
+    result = await send_webhook_async(data.url, sample_payload)
+    if not result.get("success"):
+        err_msg = result.get("error") or f"Webhook endpoint returned HTTP status {result.get('status_code')}"
+        if result.get("status_code") == 401 and "script.google.com" in data.url:
+            err_msg = "Google Apps Script 401 Unauthorized: Your script is blocking anonymous webhooks. In Apps Script: 1) Click Deploy -> New deployment, 2) Set 'Who has access' to 'Anyone' (not 'Only myself'), and 3) Copy the URL ending in '/exec' (not '/dev')."
+        raise HTTPException(
+            status_code=400,
+            detail=err_msg
+        )
+
+    return {
+        "status": "success",
+        "status_code": result.get("status_code"),
+        "latency_ms": result.get("latency_ms"),
+        "response_text": result.get("response_text")
+    }
+
+
+@router.post("/webhook/send")
+async def send_jobs_to_webhook(data: WebhookSendRequest, db: Session = Depends(get_db)):
+    """
+    Dispatches selected jobs to a webhook URL via the backend server.
+    Bypasses browser CORS restrictions when sending to Google Apps Script.
+    """
+    if not data.url or not data.url.strip().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid webhook URL.")
+
+    jobs = db.query(Job).filter(Job.id.in_(data.job_ids)).all()
+    if not jobs:
+        raise HTTPException(status_code=404, detail="No matching jobs found.")
+
+    payloads = [format_job_payload(j) for j in jobs]
+    body = payloads[0] if len(payloads) == 1 else payloads
+
+    result = await send_webhook_async(data.url, body)
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=400,
+            detail=result.get("error") or f"Webhook delivery failed with HTTP {result.get('status_code')}"
+        )
+
+    return {
+        "status": "success",
+        "records_sent": len(jobs),
+        "status_code": result.get("status_code"),
+        "latency_ms": result.get("latency_ms")
+    }

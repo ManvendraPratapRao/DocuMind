@@ -335,6 +335,13 @@ export default function App() {
       formData.append('schema_id', selectedSchemaId)
     }
 
+    // Attach webhook URL if auto-batch is enabled
+    const webhookUrl = localStorage.getItem('documind_webhook_url')
+    const autoBatch = localStorage.getItem('documind_auto_webhook_batch') !== 'false'
+    if (webhookUrl && autoBatch) {
+      formData.append('webhook_url', webhookUrl)
+    }
+
     try {
       const { data } = await axios.post(`${API_URL}/async/batch-extract`, formData, {
         headers: {
@@ -381,6 +388,13 @@ export default function App() {
         return
       }
       formData.append('schema_id', selectedSchemaId)
+    }
+
+    // Attach webhook URL if auto-single is enabled
+    const webhookUrl = localStorage.getItem('documind_webhook_url')
+    const autoSingle = localStorage.getItem('documind_auto_webhook_single') !== 'false'
+    if (webhookUrl && autoSingle) {
+      formData.append('webhook_url', webhookUrl)
     }
 
     try {
@@ -603,21 +617,17 @@ export default function App() {
     }
 
     try {
-      // POST the aggregated results to the webhook
-      const payload = selectedData.map(j => ({
-        job_id: j.job_id,
-        filename: j.filename,
-        doc_type: j.doc_type,
-        data: j.result
-      }));
-      
-      await axios.post(webhookUrl, payload, {
-        headers: { 'Content-Type': 'application/json' }
+      const activeKey = (apiKey && apiKey.trim()) || DEFAULT_DEMO_KEY;
+      const res = await axios.post(`${API_URL}/async/webhook/send`, {
+        url: webhookUrl,
+        job_ids: selectedJobs
+      }, {
+        headers: { Authorization: `Bearer ${activeKey}` }
       });
-      alert(`Successfully sent ${selectedData.length} records to Webhook!`);
+      alert(`Successfully dispatched ${res.data.records_sent} records to Google Sheets / Webhook (${res.data.latency_ms}ms)!`);
       setSelectedJobs([]);
     } catch (err) {
-      alert("Webhook failed: " + (err.message || 'Unknown error'));
+      alert("Webhook delivery failed: " + (err.response?.data?.detail || err.message || 'Unknown error'));
     }
   }
 

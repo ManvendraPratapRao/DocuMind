@@ -3,7 +3,7 @@ import {
   CheckCircle2, XCircle, Copy, Download,
   ChevronDown, ChevronRight, FileText, Sparkles, ZoomIn, ZoomOut, Maximize2, TableProperties, Code,
   User, Calendar, DollarSign, Building2, Hash, Percent, GripHorizontal, Pencil, Check, Loader2, Save,
-  Layers
+  Layers, FileSpreadsheet
 } from 'lucide-react'
 import DocumentViewer from './viewer/DocumentViewer'
 import Papa from 'papaparse'
@@ -128,6 +128,36 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
   const [topHeight, setTopHeight] = useState(55) // percentage
   const [isDragging, setIsDragging] = useState(false)
   const containerRef = useRef(null)
+
+  // Direct webhook export state
+  const [isSendingWebhook, setIsSendingWebhook] = useState(false)
+  const [webhookSent, setWebhookSent] = useState(false)
+
+  const handleSendToWebhook = async () => {
+    const webhookUrl = localStorage.getItem('documind_webhook_url')
+    if (!webhookUrl) {
+      alert("Please configure your Google Sheets or Webhook URL in the Settings page first.")
+      return
+    }
+    if (!job?.job_id) return
+    setIsSendingWebhook(true)
+    try {
+      const key = apiKey || localStorage.getItem('documind_api_key') || 'documind_demo_access'
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      const res = await axios.post(`${API_URL}/async/webhook/send`, {
+        url: webhookUrl,
+        job_ids: [job.job_id]
+      }, {
+        headers: { Authorization: `Bearer ${key}` }
+      })
+      setWebhookSent(true)
+      setTimeout(() => setWebhookSent(false), 3000)
+    } catch (err) {
+      alert("Webhook dispatch failed: " + (err.response?.data?.detail || err.message || 'Unknown error'))
+    } finally {
+      setIsSendingWebhook(false)
+    }
+  }
 
   // Keep local result in sync when switching jobs or when job result changes
   useEffect(() => {
@@ -650,10 +680,20 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
           
           <button 
             onClick={handleExportCSV}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 rounded-lg text-[12px] font-semibold text-slate-200 transition-all ml-auto"
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 rounded-lg text-[12px] font-semibold text-slate-200 transition-all cursor-pointer"
           >
             <TableProperties size={14} />
             Export to CSV
+          </button>
+
+          <button
+            onClick={handleSendToWebhook}
+            disabled={isSendingWebhook}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-[12px] font-bold transition-all shadow-md shadow-emerald-950/40 cursor-pointer ml-auto active:scale-95"
+            title="Send extracted data directly to Google Sheets or Webhook"
+          >
+            {isSendingWebhook ? <Loader2 size={14} className="animate-spin" /> : webhookSent ? <Check size={14} /> : <FileSpreadsheet size={14} />}
+            {webhookSent ? 'Synced to Sheets!' : isSendingWebhook ? 'Sending...' : 'Send to Google Sheets'}
           </button>
         </div>
         
