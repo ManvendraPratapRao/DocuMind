@@ -3,7 +3,7 @@ import {
   CheckCircle2, XCircle, Copy, Download,
   ChevronDown, ChevronRight, FileText, Sparkles, ZoomIn, ZoomOut, Maximize2, TableProperties, Code,
   User, Calendar, DollarSign, Building2, Hash, Percent, GripHorizontal, Pencil, Check, Loader2, Save,
-  Layers, FileSpreadsheet
+  Layers, FileSpreadsheet, RefreshCw
 } from 'lucide-react'
 import DocumentViewer from './viewer/DocumentViewer'
 import Papa from 'papaparse'
@@ -129,11 +129,22 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
   const [isDragging, setIsDragging] = useState(false)
   const containerRef = useRef(null)
 
-  // Direct webhook export state
+  // Direct webhook export state with Idempotency & In-place update detection
   const [isSendingWebhook, setIsSendingWebhook] = useState(false)
   const [webhookSent, setWebhookSent] = useState(false)
+  const [syncedJobs, setSyncedJobs] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('documind_synced_jobs') || '{}')
+    } catch {
+      return {}
+    }
+  })
+  const [hasEditedSinceSync, setHasEditedSinceSync] = useState(false)
+
+  const isJobSynced = Boolean(job?.job_id && syncedJobs[job.job_id])
 
   const handleSendToWebhook = async () => {
+    if (isSendingWebhook) return
     const webhookUrl = localStorage.getItem('documind_webhook_url')
     if (!webhookUrl) {
       alert("Please configure your Google Sheets or Webhook URL in the Settings page first.")
@@ -144,12 +155,24 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
     try {
       const key = apiKey || localStorage.getItem('documind_api_key') || 'documind_demo_access'
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-      const res = await axios.post(`${API_URL}/async/webhook/send`, {
+      await axios.post(`${API_URL}/async/webhook/send`, {
         url: webhookUrl,
         job_ids: [job.job_id]
       }, {
         headers: { Authorization: `Bearer ${key}` }
       })
+
+      // Mark this job as synced in state and persistent localStorage
+      setSyncedJobs(prev => {
+        const updated = { ...prev, [job.job_id]: Date.now() }
+        try {
+          localStorage.setItem('documind_synced_jobs', JSON.stringify(updated))
+        } catch (e) {
+          console.warn('Failed to save synced jobs to localStorage', e)
+        }
+        return updated
+      })
+      setHasEditedSinceSync(false)
       setWebhookSent(true)
       setTimeout(() => setWebhookSent(false), 3000)
     } catch (err) {
@@ -164,9 +187,11 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
     setResultData(job?.result || {})
     setIsEditing(false)
     setSaveSuccess(false)
+    setHasEditedSinceSync(false)
   }, [job?.job_id, job?.result])
 
   const updateFlatField = (key, value) => {
+    setHasEditedSinceSync(true)
     setResultData(prev => {
       const updated = { ...prev, [key]: value }
       if (job) job.result = updated
@@ -175,6 +200,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
   }
 
   const updateNestedListItem = (listKey, itemIndex, fieldKey, value) => {
+    setHasEditedSinceSync(true)
     setResultData(prev => {
       const list = Array.isArray(prev[listKey]) ? [...prev[listKey]] : []
       if (list[itemIndex]) {
@@ -187,6 +213,7 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
   }
 
   const updateNestedObjectField = (parentKey, fieldKey, value) => {
+    setHasEditedSinceSync(true)
     setResultData(prev => {
       const parent = typeof prev[parentKey] === 'object' && prev[parentKey] !== null ? { ...prev[parentKey] } : {}
       parent[fieldKey] = value
@@ -689,11 +716,51 @@ export default function ResultsPanel({ job, filePreviewUrl, uploadedFile, onNewE
           <button
             onClick={handleSendToWebhook}
             disabled={isSendingWebhook}
-            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-[12px] font-bold transition-all shadow-md shadow-emerald-950/40 cursor-pointer ml-auto active:scale-95"
-            title="Send extracted data directly to Google Sheets or Webhook"
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-bold transition-all shadow-md ml-auto active:scale-95 cursor-pointer ${
+              isSendingWebhook
+                ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed opacity-80'
+                : webhookSent
+                  ? 'bg-emerald-600 text-white shadow-emerald-950/40 ring-1 ring-emerald-400/50'
+                  : isJobSynced && !hasEditedSinceSync
+                    ? 'bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-500/40 shadow-emerald-950/20'
+                    : isJobSynced && hasEditedSinceSync
+                      ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 shadow-amber-950/20'
+                      : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-950/40'
+            }`}
+            title={
+              isJobSynced && !hasEditedSinceSync
+                ? 'Document already recorded in Google Sheets. (Zero duplicates: re-sending updates in-place)'
+                : isJobSynced && hasEditedSinceSync
+                  ? 'Fields were modified! Click to update the existing row in Google Sheets in-place.'
+                  : 'Send extracted data directly to Google Sheets or Webhook'
+            }
           >
-            {isSendingWebhook ? <Loader2 size={14} className="animate-spin" /> : webhookSent ? <Check size={14} /> : <FileSpreadsheet size={14} />}
-            {webhookSent ? 'Synced to Sheets!' : isSendingWebhook ? 'Sending...' : 'Send to Google Sheets'}
+            {isSendingWebhook ? (
+              <>
+                <Loader2 size={14} className="animate-spin text-slate-400" />
+                <span>Syncing...</span>
+              </>
+            ) : webhookSent ? (
+              <>
+                <Check size={14} className="text-white" />
+                <span>{isJobSynced && hasEditedSinceSync ? 'Updated in Sheets!' : 'Synced to Sheets!'}</span>
+              </>
+            ) : isJobSynced && !hasEditedSinceSync ? (
+              <>
+                <Check size={14} className="text-emerald-400" />
+                <span>Synced to Sheets</span>
+              </>
+            ) : isJobSynced && hasEditedSinceSync ? (
+              <>
+                <RefreshCw size={14} className="text-amber-400 animate-spin-slow" />
+                <span>Update in Sheets</span>
+              </>
+            ) : (
+              <>
+                <FileSpreadsheet size={14} />
+                <span>Send to Google Sheets</span>
+              </>
+            )}
           </button>
         </div>
         

@@ -26,6 +26,14 @@ export default function BatchProcessingView({
   const [isExporting, setIsExporting] = useState(false)
   const [isSyncingWebhook, setIsSyncingWebhook] = useState(false)
   const [webhookSyncSuccess, setWebhookSyncSuccess] = useState(false)
+  const [syncedBatches, setSyncedBatches] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('documind_synced_batches') || '{}')
+    } catch {
+      return {}
+    }
+  })
+  const isBatchSynced = Boolean(batchId && syncedBatches[batchId])
   const [error, setError] = useState(null)
   const timerRef = useRef(null)
 
@@ -110,6 +118,7 @@ export default function BatchProcessingView({
   }
 
   const handleSyncToWebhook = async () => {
+    if (isSyncingWebhook) return
     const webhookUrl = localStorage.getItem('documind_webhook_url')
     if (!webhookUrl) {
       alert("Please configure your Google Sheets or Webhook URL in Settings first.")
@@ -124,10 +133,33 @@ export default function BatchProcessingView({
     setIsSyncingWebhook(true)
     try {
       const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
-      const res = await axios.post(`${apiUrl}/async/webhook/send`, {
+      await axios.post(`${apiUrl}/async/webhook/send`, {
         url: webhookUrl,
         job_ids: completedJobIds
       }, { headers })
+
+      // Persist batch sync state
+      setSyncedBatches(prev => {
+        const updated = { ...prev, [batchId]: { timestamp: Date.now(), count: completedJobIds.length } }
+        try {
+          localStorage.setItem('documind_synced_batches', JSON.stringify(updated))
+        } catch (e) {
+          console.warn('Failed to save synced batches to localStorage', e)
+        }
+        return updated
+      })
+
+      // Also mark each individual job in localStorage as synced so ResultsPanel reflects it
+      try {
+        const storedJobs = JSON.parse(localStorage.getItem('documind_synced_jobs') || '{}')
+        completedJobIds.forEach(id => {
+          storedJobs[id] = Date.now()
+        })
+        localStorage.setItem('documind_synced_jobs', JSON.stringify(storedJobs))
+      } catch (e) {
+        console.warn('Failed to update individual synced jobs in localStorage', e)
+      }
+
       setWebhookSyncSuccess(true)
       setTimeout(() => setWebhookSyncSuccess(false), 3000)
     } catch (err) {
@@ -176,11 +208,42 @@ export default function BatchProcessingView({
           <button
             onClick={handleSyncToWebhook}
             disabled={!batchData || batchData.completed === 0 || isSyncingWebhook}
-            className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white text-[12px] font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-emerald-950/30"
-            title="Push completed batch documents directly into Google Sheets"
+            className={`px-3.5 py-2 text-[12px] font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-md ${
+              isSyncingWebhook
+                ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed opacity-80'
+                : webhookSyncSuccess
+                  ? 'bg-emerald-600 text-white shadow-emerald-950/40 ring-1 ring-emerald-400/50'
+                  : isBatchSynced
+                    ? 'bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-500/40 shadow-emerald-950/20'
+                    : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white shadow-emerald-950/30'
+            }`}
+            title={
+              isBatchSynced
+                ? `Batch already pushed to Google Sheets (${syncedBatches[batchId]?.count || batchData.completed} docs). Zero duplicates: re-syncing uses in-place UPSERT.`
+                : "Push completed batch documents directly into Google Sheets"
+            }
           >
-            {isSyncingWebhook ? <Loader2 size={14} className="animate-spin" /> : webhookSyncSuccess ? <CheckCircle2 size={14} /> : <FileSpreadsheet size={14} />}
-            <span>{webhookSyncSuccess ? 'Synced to Sheets!' : 'Sync to Sheets'}</span>
+            {isSyncingWebhook ? (
+              <>
+                <Loader2 size={14} className="animate-spin text-slate-400" />
+                <span>Syncing Batch...</span>
+              </>
+            ) : webhookSyncSuccess ? (
+              <>
+                <CheckCircle2 size={14} className="text-white" />
+                <span>Synced {batchData?.completed} Docs!</span>
+              </>
+            ) : isBatchSynced ? (
+              <>
+                <CheckCircle2 size={14} className="text-emerald-400" />
+                <span>Synced to Sheets ({syncedBatches[batchId]?.count || batchData?.completed})</span>
+              </>
+            ) : (
+              <>
+                <FileSpreadsheet size={14} />
+                <span>Sync to Sheets</span>
+              </>
+            )}
           </button>
 
           {/* Export JSON Button */}

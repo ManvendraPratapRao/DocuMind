@@ -14,9 +14,10 @@ const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
     // Support both single document payload and batch arrays
     var items = Array.isArray(postData) ? postData : [postData];
 
-    // Auto-create professional header row on new sheets
+    // Auto-create professional header row on new sheets with Doc ID in Column 1
     if (sheet.getLastRow() === 0) {
       sheet.appendRow([
+        "Doc ID",
         "Timestamp",
         "Filename",
         "Document Type",
@@ -28,15 +29,28 @@ const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
         "Confidence",
         "Status"
       ]);
-      var headerRange = sheet.getRange(1, 1, 1, 10);
+      var headerRange = sheet.getRange(1, 1, 1, 11);
       headerRange.setFontWeight("bold");
       headerRange.setBackground("#0f172a");
       headerRange.setFontColor("#f8fafc");
     }
 
-    // Append each extracted record as a new row
+    // Read all existing rows to index by Doc ID (Guarantees zero duplicates / UPSERT)
+    var allRows = sheet.getDataRange().getValues();
+    var idRowMap = {};
+    for (var r = 1; r < allRows.length; r++) {
+      var idVal = String(allRows[r][0] || "").trim();
+      if (idVal) {
+        idRowMap[idVal] = r + 1; // 1-indexed row number
+      }
+    }
+
+    var inserted = 0;
+    var updated = 0;
+
     for (var i = 0; i < items.length; i++) {
       var item = items[i];
+      var docId = String(item.job_id || item.id || "").trim();
       var d = item.data || item.result || item;
       
       var docNum = d.invoice_number || d.number || d.receipt_number || d.order_number || d.id || "";
@@ -46,7 +60,8 @@ const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
       var total = d.total_amount ? "$" + d.total_amount : (d.total || d.amount || "");
       var conf = item.confidence_score ? Math.round(item.confidence_score * 100) + "%" : "100%";
 
-      sheet.appendRow([
+      var rowValues = [
+        docId || "N/A",
         new Date().toLocaleString(),
         item.filename || "Document",
         item.doc_type || "document",
@@ -57,12 +72,25 @@ const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
         total,
         conf,
         item.status || "done"
-      ]);
+      ];
+
+      // UPSERT Logic: If docId exists, update row in-place; otherwise append new row
+      if (docId && idRowMap[docId]) {
+        var targetRow = idRowMap[docId];
+        sheet.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
+        updated++;
+      } else {
+        sheet.appendRow(rowValues);
+        if (docId) idRowMap[docId] = sheet.getLastRow();
+        inserted++;
+      }
     }
 
     return ContentService.createTextOutput(JSON.stringify({
       status: "success",
-      rows_added: items.length
+      inserted: inserted,
+      updated: updated,
+      message: "Processed " + items.length + " item(s) without duplicates."
     })).setMimeType(ContentService.MimeType.JSON);
 
   } catch (err) {
@@ -71,7 +99,7 @@ const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
       error: err.toString()
     })).setMimeType(ContentService.MimeType.JSON);
   }
-}`;
+};`
 
 export default function SettingsPage() {
   const [webhookUrl, setWebhookUrl] = useState('')
@@ -330,6 +358,14 @@ export default function SettingsPage() {
                     >
                       {copiedScript ? <><Check size={13} /> Copied to Clipboard!</> : <><Copy size={13} /> Copy Google Script</>}
                     </button>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                      <ShieldCheck size={11} /> Zero-Duplicate Protection (UPSERT)
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      Re-exporting or multiple clicks update the same row in-place without duplicating.
+                    </span>
                   </div>
                   <p className="text-slate-400 text-xs mb-3">
                     Delete any existing code in the Apps Script editor and paste this code:
